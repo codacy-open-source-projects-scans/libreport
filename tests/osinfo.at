@@ -1,0 +1,409 @@
+# -*- Autotest -*-
+
+AT_BANNER([osinfo])
+
+## ---------------------- ##
+## libreport_parse_osinfo ##
+## ---------------------- ##
+
+AT_TESTFUN([libreport_parse_osinfo],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+
+int main(void)
+{
+    libreport_g_verbose=3;
+    GHashTable *osinfo = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+    {
+        /* Test for empty input */
+        libreport_parse_osinfo("", osinfo);
+        if (osinfo)
+            g_hash_table_destroy(osinfo);
+        osinfo = NULL;
+    }
+    osinfo = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+    {
+        /* Test for standard valid os-release*/
+        libreport_parse_osinfo(
+"# Very useful comment\n"
+"NAME=Fedora\n"
+"VERSION=\"19 (Schrödinger\\'s Cat)\"\n"
+"ID=fedora\n"
+"VERSION_ID=19\n"
+"PRETTY_NAME=\"Fedora 19 (Schrödinger\\'s Cat)\"\n"
+"ANSI_COLOR=\"0;34\"\n"
+"CPE_NAME=\"cpe:/o:fedoraproject:fedora:18\"\n", osinfo);
+        assert(0 == strcmp("Fedora", g_hash_table_lookup(osinfo, OSINFO_NAME)));
+        assert(0 == strcmp("19 (Schrödinger's Cat)", g_hash_table_lookup(osinfo, "VERSION")));
+        assert(0 == strcmp("fedora", g_hash_table_lookup(osinfo, OSINFO_ID)));
+        assert(0 == strcmp("19", g_hash_table_lookup(osinfo, OSINFO_VERSION_ID)));
+        assert(0 == strcmp("Fedora 19 (Schrödinger\'s Cat)", g_hash_table_lookup(osinfo, OSINFO_PRETTY_NAME)));
+        assert(0 == strcmp("0;34", g_hash_table_lookup(osinfo, "ANSI_COLOR")));
+        assert(0 == strcmp("cpe:/o:fedoraproject:fedora:18", g_hash_table_lookup(osinfo, "CPE_NAME")));
+        if (osinfo)
+            g_hash_table_destroy(osinfo);
+        osinfo = NULL;
+    }
+    osinfo = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+    {
+        /* Test for standard valid os-release*/
+        libreport_parse_osinfo(
+"NAME=Fedora\n"
+"VERSION=\"20 (Rawhide)\"\n"
+"ID=fedora\n"
+"VERSION_ID=20\n"
+"PRETTY_NAME=\"Fedora 20 (Rawhide)\"\n"
+"ANSI_COLOR=\"0;34\"\n"
+"CPE_NAME=\"cpe:/o:fedoraproject:fedora:20\"\n"
+"REDHAT_BUGZILLA_PRODUCT=\"Fedora\"\n"
+"REDHAT_BUGZILLA_PRODUCT_VERSION=Rawhide\n"
+"REDHAT_SUPPORT_PRODUCT=\"Fedora\"\n"
+"REDHAT_SUPPORT_PRODUCT_VERSION=Rawhide\n", osinfo);
+        assert(0 == strcmp("Fedora", g_hash_table_lookup(osinfo, OSINFO_NAME)));
+        assert(0 == strcmp("20 (Rawhide)", g_hash_table_lookup(osinfo, "VERSION")));
+        assert(0 == strcmp("fedora", g_hash_table_lookup(osinfo, OSINFO_ID)));
+        assert(0 == strcmp("20", g_hash_table_lookup(osinfo, OSINFO_VERSION_ID)));
+        assert(0 == strcmp("Fedora 20 (Rawhide)", g_hash_table_lookup(osinfo, OSINFO_PRETTY_NAME)));
+        assert(0 == strcmp("0;34", g_hash_table_lookup(osinfo, "ANSI_COLOR")));
+        assert(0 == strcmp("cpe:/o:fedoraproject:fedora:20", g_hash_table_lookup(osinfo, "CPE_NAME")));
+        assert(0 == strcmp("Fedora", g_hash_table_lookup(osinfo, "REDHAT_BUGZILLA_PRODUCT")));
+        assert(0 == strcmp("Rawhide", g_hash_table_lookup(osinfo, "REDHAT_BUGZILLA_PRODUCT_VERSION")));
+        assert(0 == strcmp("Fedora", g_hash_table_lookup(osinfo, "REDHAT_SUPPORT_PRODUCT")));
+        assert(0 == strcmp("Rawhide", g_hash_table_lookup(osinfo, "REDHAT_SUPPORT_PRODUCT_VERSION")));
+        if (osinfo)
+            g_hash_table_destroy(osinfo);
+        osinfo = NULL;
+    }
+    osinfo = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+    {
+        /* Test for standard os-release with few errors */
+        libreport_parse_osinfo(
+"# Very useful comment\n"
+"# FOO=blah\n"
+"NAME=Fedora\n"
+"VERSION\n"
+"ID=fedora\n"
+"# Comment in lines\n"
+"VERSION_ID=19\n"
+"=\"Fedora 19 (Schrödinger\\'s Cat)\"\n"
+"ANSI_COLOR=\"0;34\"\n"
+"# The next line misses new line character\n"
+"CPE_NAME=\"cpe:/o:fedoraproject:fedora:18\"", osinfo);
+        assert(NULL == g_hash_table_lookup(osinfo, "FOO"));
+        assert(0 == strcmp("Fedora", g_hash_table_lookup(osinfo, OSINFO_NAME)));
+        assert(NULL == g_hash_table_lookup(osinfo, "VERSION"));
+        assert(0 == strcmp("fedora", g_hash_table_lookup(osinfo, OSINFO_ID)));
+        assert(0 == strcmp("19", g_hash_table_lookup(osinfo, OSINFO_VERSION_ID)));
+        assert(NULL == g_hash_table_lookup(osinfo, OSINFO_PRETTY_NAME));
+        assert(0 == strcmp("0;34", g_hash_table_lookup(osinfo, "ANSI_COLOR")));
+        assert(0 == strcmp("cpe:/o:fedoraproject:fedora:18", g_hash_table_lookup(osinfo, "CPE_NAME")));
+        if (osinfo)
+            g_hash_table_destroy(osinfo);
+        osinfo = NULL;
+    }
+    return 0;
+}
+]])
+
+
+## ----------------------------- ##
+## libreport_parse_osinfo_for_bz ##
+## ----------------------------- ##
+
+AT_TESTFUN([libreport_parse_osinfo_for_bz],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+
+void test(const char *osinfo_bytes, const char *product, const char *version)
+{
+    g_autoptr(GHashTable) osinfo = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+    libreport_parse_osinfo(osinfo_bytes, osinfo);
+
+    g_autofree char *built_product = (char *)0xDEADBEAF;
+    g_autofree char *built_version = (char *)0xDEADBEAF;
+    libreport_parse_osinfo_for_bz(osinfo, &built_product, &built_version);
+
+    if (product != NULL && built_product != NULL)
+    {
+        if (0 != strcmp(product, built_product))
+        {
+            fprintf(stderr, "'%s' != '%s'", product, built_product);
+            assert(!"Parsed version doesn't match with expected");
+        }
+    }
+    else if (product != built_product)
+        assert(!"Invalid result. Both should be NULL");
+
+    if (version != NULL && built_version != NULL)
+    {
+        if (0 != strcmp(version, built_version))
+        {
+            fprintf(stderr, "'%s' != '%s'", version, built_version);
+            assert(!"Parsed version doesn't match with expected");
+        }
+    }
+    else if (version != built_version)
+        assert(!"Invalid result. Both should be NULL");
+}
+
+int main(void)
+{
+    libreport_g_verbose=3;
+
+    test("NAME=Fedora\n"
+         "VERSION=\"19 (Schrödinger\\'s Cat)\"\n"
+         "ID=fedora\n"
+         "VERSION_ID=19\n"
+         "PRETTY_NAME=\"Fedora 19 (Schrödinger\\'s Cat)\"\n"
+         "ANSI_COLOR=\"0;34\"\n"
+         "CPE_NAME=\"cpe:/o:fedoraproject:fedora:18\"\n"
+         ,"Fedora", "19");
+
+    test("NAME=Fedora\n"
+         "VERSION=\"20 (Rawhide)\"\n"
+         "ID=fedora\n"
+         "VERSION_ID=20\n"
+         "PRETTY_NAME=\"Fedora 20 (Rawhide)\"\n"
+         "ANSI_COLOR=\"0;34\"\n"
+         "CPE_NAME=\"cpe:/o:fedoraproject:fedora:20\"\n"
+         "REDHAT_BUGZILLA_PRODUCT=\"Fedora\"\n"
+         "REDHAT_BUGZILLA_PRODUCT_VERSION=Rawhide\n"
+         "REDHAT_SUPPORT_PRODUCT=\"Fedora\"\n"
+         "REDHAT_SUPPORT_PRODUCT_VERSION=Rawhide\n"
+         ,"Fedora", "Rawhide");
+
+    test("NAME=\"Red Hat Enterprise Linux Client\"\n"
+         "VERSION=\"7.0 Beta (Maipo)\"\n"
+         "ID=rhel\n"
+         "VERSION_ID=7.0\n"
+         "PRETTY_NAME=\"Red Hat Enterprise Linux Client 7.0 Beta (Maipo)\"\n"
+         "ANSI_COLOR=\"0;31\"\n"
+         "CPE_NAME=\"cpe:/o:redhat:enterprise_linux:7.0.0:beta:client\"\n"
+         "REDHAT_BUGZILLA_PRODUCT=\"Red Hat Enterprise Linux 7\"\n"
+         "REDHAT_BUGZILLA_PRODUCT_VERSION=7.1\n"
+         ,"Red Hat Enterprise Linux 7", "7.1");
+
+    test("NAME=\"Red Hat Enterprise Linux Client\"\n"
+         "VERSION=\"7.0 Beta (Maipo)\"\n"
+         "ID=rhel\n"
+         "VERSION_ID=7.0\n"
+         "PRETTY_NAME=\"Red Hat Enterprise Linux Client 7.0 Beta (Maipo)\"\n"
+         "ANSI_COLOR=\"0;31\"\n"
+         "CPE_NAME=\"cpe:/o:redhat:enterprise_linux:7.0.0:beta:client\"\n"
+         "REDHAT_BUGZILLA_PRODUCT=\"Red Hat Enterprise Linux 7\"\n"
+         ,"Red Hat Enterprise Linux 7", "7.0");
+
+    test("NAME=\"Red Hat Enterprise Linux Client\"\n"
+         "VERSION=\"7.0 Beta (Maipo)\"\n"
+         "ID=rhel\n"
+         "VERSION_ID=7.0\n"
+         "PRETTY_NAME=\"Red Hat Enterprise Linux Client 7.0 Beta (Maipo)\"\n"
+         "ANSI_COLOR=\"0;31\"\n"
+         "CPE_NAME=\"cpe:/o:redhat:enterprise_linux:7.0.0:beta:client\"\n"
+         "REDHAT_BUGZILLA_PRODUCT_VERSION=7.1\n"
+         ,"Red Hat Enterprise Linux Client", "7.1");
+
+    test("PRETTY_NAME=\"Red Hat Enterprise Linux Server release 6.2 Beta (Santiago)\"\n"
+         ,"Red Hat Enterprise Linux 6", "6.2");
+
+    test("" ,NULL ,NULL);
+
+    return 0;
+}
+]])
+
+## ----------------------- ##
+## parse_osinfo_for_bugurl ##
+## ----------------------- ##
+
+AT_TESTFUN([parse_osinfo_for_bugurl], [[
+#include "testsuite.h"
+#include "internal_libreport.h"
+#include <assert.h>
+
+void test(const char *osinfo_bytes, const char *url)
+{
+    GHashTable *osinfo = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+    libreport_parse_osinfo(osinfo_bytes, osinfo);
+
+    g_autofree char *default_BugzillaURL = (char *)0xDEADBEEF;
+    libreport_parse_osinfo_for_bug_url(osinfo, &default_BugzillaURL);
+
+    TS_ASSERT_STRING_EQ(default_BugzillaURL, url, "Tested URL");
+
+    if (osinfo)
+        g_hash_table_destroy(osinfo);
+}
+
+int main(void)
+{
+    libreport_g_verbose=3;
+
+    test("NAME=Fedora\n"
+         "VERSION=\"19 (Schrödinger\\'s Cat)\"\n"
+         "ID=fedora\n"
+         "VERSION_ID=19\n"
+         "PRETTY_NAME=\"Fedora 19 (Schrödinger\\'s Cat)\"\n"
+         "ANSI_COLOR=\"0;34\"\n"
+         "CPE_NAME=\"cpe:/o:fedoraproject:fedora:18\"\n"
+         ,NULL);
+
+    test("NAME=\"Red Hat Enterprise Linux Client\"\n"
+         "VERSION=\"7.0 Beta (Maipo)\"\n"
+         "ID=rhel\n"
+         "VERSION_ID=7.0\n"
+         "PRETTY_NAME=\"Red Hat Enterprise Linux Client 7.0 Beta (Maipo)\"\n"
+         "ANSI_COLOR=\"0;31\"\n"
+         "CPE_NAME=\"cpe:/o:redhat:enterprise_linux:7.0.0:beta:client\"\n"
+         "BUG_REPORT_URL=\"notrfc\"\n"
+         "REDHAT_BUGZILLA_PRODUCT=\"Red Hat Enterprise Linux 7\"\n"
+         "REDHAT_BUGZILLA_PRODUCT_VERSION=7.1\n"
+         ,"notrfc");
+
+    test("NAME=\"Red Hat Enterprise Linux Client\"\n"
+         "VERSION=\"7.0 Beta (Maipo)\"\n"
+         "ID=rhel\n"
+         "VERSION_ID=7.0\n"
+         "PRETTY_NAME=\"Red Hat Enterprise Linux Client 7.0 Beta (Maipo)\"\n"
+         "ANSI_COLOR=\"0;31\"\n"
+         "CPE_NAME=\"cpe:/o:redhat:enterprise_linux:7.0.0:beta:client\"\n"
+         "BUG_REPORT_URL=\"http://bugzilla.redhat.com\"\n"
+         "REDHAT_BUGZILLA_PRODUCT=\"Red Hat Enterprise Linux 7\"\n"
+         "REDHAT_BUGZILLA_PRODUCT_VERSION=7.1\n"
+         ,"http://bugzilla.redhat.com");
+
+    test("" , NULL);
+
+    return 0;
+}
+]])
+
+## ----------------------- ##
+## problem_data_get_osinfo ##
+## ----------------------- ##
+
+AT_TESTFUN([problem_data_get_osinfo],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+
+int main(void)
+{
+    libreport_g_verbose=3;
+
+    problem_data_t *pd = problem_data_new();
+    GHashTable *osinfo = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+    {
+        problem_data_add_text_noteditable(pd, FILENAME_OS_INFO,
+             "NAME=Fedora\n"
+             "VERSION_ID=19\n"
+             "PRETTY_NAME=\"Fedora 19 (Schrödinger\\'s Cat)\"\n");
+
+        problem_data_get_osinfo(pd, osinfo);
+        assert(0 == strcmp("Fedora", g_hash_table_lookup(osinfo, OSINFO_NAME)));
+        if (osinfo)
+            g_hash_table_destroy(osinfo);
+        problem_data_free(pd);
+    }
+    pd = problem_data_new();
+    osinfo = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+    {
+        problem_data_add_text_noteditable(pd, FILENAME_OS_RELEASE, "Fedora release 19 (Schrödinger's Cat)");
+
+        problem_data_get_osinfo(pd, osinfo);
+        assert(0 == strcmp("Fedora release 19 (Schrödinger's Cat)", g_hash_table_lookup(osinfo, OSINFO_PRETTY_NAME)));
+        if (osinfo)
+            g_hash_table_destroy(osinfo);
+        problem_data_free(pd);
+    }
+    pd = problem_data_new();
+    osinfo = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+    {
+        problem_data_add_text_noteditable(pd, FILENAME_ROOTDIR, "/var/lib/mock");
+        problem_data_add_text_noteditable(pd, FILENAME_OS_INFO_IN_ROOTDIR,
+             "NAME=\"Red Hat Enterprise Linux Client\"\n"
+             "VERSION_ID=7.0\n"
+             "PRETTY_NAME=\"Red Hat Enterprise Linux Client 7.0 Beta (Maipo)\"\n");
+        problem_data_add_text_noteditable(pd, FILENAME_OS_INFO,
+             "NAME=Fedora\n"
+             "VERSION_ID=19\n"
+             "PRETTY_NAME=\"Fedora 19 (Schrödinger\\'s Cat)\"\n");
+
+        problem_data_get_osinfo(pd, osinfo);
+        assert(0 == strcmp("Red Hat Enterprise Linux Client", g_hash_table_lookup(osinfo, OSINFO_NAME)));
+        if (osinfo)
+            g_hash_table_destroy(osinfo);
+        problem_data_free(pd);
+    }
+    pd = problem_data_new();
+    osinfo = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+    {
+        problem_data_add_text_noteditable(pd, FILENAME_ROOTDIR, "/var/lib/mock");
+        problem_data_add_text_noteditable(pd, FILENAME_OS_RELEASE_IN_ROOTDIR, "Red Hat Enterprise Linux Client 7.0 Beta (Maipo)");
+        problem_data_add_text_noteditable(pd, FILENAME_OS_RELEASE, "Fedora release 19 (Schrödinger's Cat)");
+
+        problem_data_get_osinfo(pd, osinfo);
+        assert(0 == strcmp("Red Hat Enterprise Linux Client 7.0 Beta (Maipo)", g_hash_table_lookup(osinfo, OSINFO_PRETTY_NAME)));
+        if (osinfo)
+            g_hash_table_destroy(osinfo);
+        problem_data_free(pd);
+    }
+
+    return 0;
+}
+]])
+
+## ------------------- ##
+## parse_osinfo_python ##
+## ------------------- ##
+
+AT_PYTESTFUN([parse_osinfo_python],
+[[import sys
+
+sys.path.insert(0, "../../../src/report-python")
+sys.path.insert(0, "../../../src/report-python/report/report/.libs")
+
+report = __import__("report", globals(), locals(), [], 0)
+sys.modules["report"] = report
+
+lines = [
+    'NAME=fedora\n',
+    'VERSION="20 (Heisenbug)"\n',
+    'ID=fedora\n',
+    'VERSION_ID=20\n',
+    'PRETTY_NAME="Fedora 20 (Heisenbug)"\n',
+    'ANSI_COLOR="0;34"\n',
+    'CPE_NAME="cpe:/o:fedoraproject:fedora:20"\n',
+    'HOME_URL="https://fedoraproject.org/"\n',
+    'BUG_REPORT_URL="https://bugzilla.redhat.com/"\n',
+    'REDHAT_BUGZILLA_PRODUCT="Fedora"\n',
+    'REDHAT_BUGZILLA_PRODUCT_VERSION=20\n',
+    'REDHAT_SUPPORT_PRODUCT="Fedora"\n',
+    'REDHAT_SUPPORT_PRODUCT_VERSION=20',
+]
+
+expected = {
+    'NAME':'fedora',
+    'VERSION':'20 (Heisenbug)',
+    'ID':'fedora',
+    'VERSION_ID':'20',
+    'PRETTY_NAME':'Fedora 20 (Heisenbug)',
+    'ANSI_COLOR':'0;34',
+    'CPE_NAME':'cpe:/o:fedoraproject:fedora:20',
+    'HOME_URL':'https://fedoraproject.org/',
+    'BUG_REPORT_URL':'https://bugzilla.redhat.com/',
+    'REDHAT_BUGZILLA_PRODUCT':'Fedora',
+    'REDHAT_BUGZILLA_PRODUCT_VERSION':'20',
+    'REDHAT_SUPPORT_PRODUCT':'Fedora',
+    'REDHAT_SUPPORT_PRODUCT_VERSION':'20'
+}
+
+osrel = report.parse_os_release_lines(lines)
+
+print(sorted(expected.items()))
+print(sorted(osrel.items()))
+
+sys.exit(not bool(osrel == expected))
+]])

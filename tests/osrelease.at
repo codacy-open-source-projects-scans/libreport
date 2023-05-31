@@ -1,0 +1,70 @@
+# -*- Autotest -*-
+
+AT_BANNER([osrelease - 730887])
+
+## ------------------------------ ##
+## libreport_parse_release_for_bz ##
+## ------------------------------ ##
+
+AT_TESTFUN([libreport_parse_release_for_bz],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+
+/* Test parsing different release strings */
+int test(char ***input)
+{
+    char * release_string = **input;
+    int retcode = 1;
+    log_warning("release: >>%s<<\n", release_string);
+    g_autofree char *product = NULL;
+    g_autofree char *version = NULL;
+    libreport_parse_release_for_bz(release_string, &product, &version);
+    log_warning("version: >>%s<<\n", version);
+    log_warning("product: >>%s<<\n", product);
+
+    if(version == NULL || (strlen(version) == 0))
+    {
+        printf("version == NULL\n");
+        goto ret;
+    }
+
+    (*input)++; //expected product is +1 in the array
+    log_warning("'%s' == '%s'", product, **input);
+    if (strcmp(product, **input) != 0)
+        goto ret;
+
+    (*input)++; //expected version is +2 in the array
+    log_warning("'%s' == '%s'", version, **input);
+    if (strcmp(version, **input) == 0)
+        retcode = 0;
+
+ret:
+    log_warning("retcode %i\n", retcode);
+    return retcode;
+}
+
+int main(void)
+{
+    const char *releases_good[][3] =
+    {
+        //"Fedora release 15.a (Lovelock)", //should fail
+        {"Fedora release 16 (Rawhide)", "Fedora", "rawhide"},
+        {"Fedora release 16 (Verne)", "Fedora", "16"},
+        {"Fedora 16-Alpha", "Fedora", "16"},// rhbz#730887
+        {"Fedora release 17 (Rawhide)", "Fedora", "rawhide"},
+        {"Red Hat Enterprise Linux Server release 6.2 Beta (Santiago)", "Red Hat Enterprise Linux 6", "6.2"},
+        {"Red Hat Enterprise Linux 6.2", "Red Hat Enterprise Linux 6", "6.2"},
+        {"Red Hat Enterprise Linux 123.456asd", "Red Hat Enterprise Linux 123", "123.456"},
+        {"openSUSE 12.2 (x86_64)", "openSUSE", "12.2"},
+        {}
+    };
+
+    char **tmp = (char **)releases_good;
+    while(*tmp)
+    {
+        assert(test(&tmp) == 0);
+        tmp++;
+    }
+}
+]])

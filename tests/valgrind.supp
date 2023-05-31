@@ -1,0 +1,24 @@
+{
+        libgobject
+        Memcheck:Leak
+        ...
+        obj:/usr/*lib*/libgobject-*
+        ...
+        fun:_dl_init
+}
+
+{
+        libpixman
+        Memcheck:Leak
+        ...
+        obj:/usr/*lib*/libpixman-*
+        ...
+        fun:_dl_init
+}
+
+{
+        xmlrpc_parseValue
+        Memcheck:Leak
+        ...
+        fun:xmlrpc_parseValue
+}

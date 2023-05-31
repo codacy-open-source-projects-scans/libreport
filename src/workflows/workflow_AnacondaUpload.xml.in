@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<workflow>
+    <_name>Export the problem data for manual reporting</_name>
+    <_description>Upload the data via scp or ftp to a remote destination</_description>
+
+    <events>
+        <event>report_Uploader</event>
+    </events>
+</workflow>

@@ -1,0 +1,510 @@
+# -*- Autotest -*-
+
+AT_BANNER([Configuration files])
+
+## -------------------------##
+## libreport_load_conf_file ##
+## -------------------------##
+
+AT_TESTFUN([libreport_load_conf_file],
+[[
+#include "internal_libreport.h"
+#include "stdlib.h"
+#include "stdio.h"
+
+#define CONF_PATH "../../conf/default/file.conf"
+
+typedef enum equal_result
+{
+    EQUAL,
+    DIFF_SIZE,
+    MISS_KEY,
+    DIFF_VALUE,
+} equal_result_t;
+
+equal_result_t map_string_equals(GHashTable *f, GHashTable *s)
+{
+    const guint fsize = g_hash_table_size(f);
+    const guint ssize = g_hash_table_size(s);
+    if (fsize != ssize)
+    {
+        fprintf(stdout, "instances are not equal in size: %u != %u\n", fsize, ssize);
+        return DIFF_SIZE;
+    }
+
+    GHashTableIter iter;
+    gpointer fkey = NULL;
+    gpointer fvalue = NULL;
+
+    g_hash_table_iter_init(&iter, f);
+    while(g_hash_table_iter_next(&iter, &fkey, &fvalue))
+    {
+        gpointer skey = NULL;
+        gpointer svalue = NULL;
+
+        if (!g_hash_table_lookup_extended(s, fkey, &skey, &svalue))
+        {
+            fprintf(stdout, "second misses key '%s'\n", (const char *)fkey);
+            return MISS_KEY;
+        }
+
+        if (strcmp((const char *)fvalue, (const char *)svalue) != 0)
+        {
+            fprintf(stdout, "a value of '%s' differs: '%s' != '%s'\n", (const char *)fkey, (const char *)fvalue, (const char *)svalue);
+            return DIFF_VALUE;
+        }
+    }
+
+    return EQUAL;
+}
+
+int main(int argc, char **argv)
+{
+    libreport_g_verbose = 3;
+
+    {
+        /* Self check */
+        g_autoptr(GHashTable) first = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        g_autoptr(GHashTable) second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+
+        assert(EQUAL == map_string_equals(first, first));
+        assert(EQUAL == map_string_equals(first, second));
+
+        g_hash_table_insert(first, g_strdup("first"), g_strdup("1"));
+        g_hash_table_insert(first, g_strdup("second"), g_strdup("2"));
+        g_hash_table_insert(first, g_strdup("third"), g_strdup("3"));
+
+        assert(EQUAL == map_string_equals(first, first));
+
+        assert(DIFF_SIZE == map_string_equals(first, second));
+        assert(DIFF_SIZE == map_string_equals(second, first));
+
+        g_hash_table_insert(second, g_strdup("first"), g_strdup("1"));
+        g_hash_table_insert(second, g_strdup("second"), g_strdup("2"));
+        g_hash_table_insert(second, g_strdup("third"), g_strdup("3"));
+
+        assert(EQUAL == map_string_equals(first, second));
+        assert(EQUAL == map_string_equals(second, first));
+
+        g_hash_table_insert(first, g_strdup("fifth"), g_strdup("5"));
+        g_hash_table_insert(second, g_strdup("fourth"), g_strdup("4"));
+
+        assert(MISS_KEY == map_string_equals(first, second));
+        assert(MISS_KEY == map_string_equals(second, first));
+
+        g_hash_table_insert(first, g_strdup("fourth"), g_strdup("4"));
+        g_hash_table_insert(second, g_strdup("fifth"), g_strdup("6"));
+
+        assert(DIFF_VALUE == map_string_equals(first, second));
+        assert(DIFF_VALUE == map_string_equals(second, first));
+    }
+
+    {
+        g_autoptr(GHashTable) first = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        g_hash_table_insert(first, g_strdup("success"), g_strdup("\"total\""));
+        g_hash_table_insert(first, g_strdup("failure"), g_strdup("\"none\""));
+        g_hash_table_insert(first, g_strdup("effort"), g_strdup("\"minimal\""));
+        g_hash_table_insert(first, g_strdup("state"), g_strdup("\"done\""));
+
+        g_autoptr(GHashTable) second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+
+        assert(libreport_load_conf_file(CONF_PATH, second, 0));
+
+        assert(EQUAL == map_string_equals(first, second) || !"The loaded configuration equals to the expected");
+    }
+
+    return 0;
+}
+]])
+
+
+
+## ---------------------------------- ##
+## libreport_load_conf_file_from_dirs ##
+## ---------------------------------- ##
+
+AT_TESTFUN([libreport_load_conf_file_from_dirs],
+[[
+#include "internal_libreport.h"
+
+#define CONF_NAME "file.conf"
+#define DEFAULT_DIR "../../conf/default"
+#define FIRST_DIR "../../conf/first"
+#define SECOND_DIR "../../conf/second"
+
+typedef enum equal_result
+{
+    EQUAL,
+    DIFF_SIZE,
+    MISS_KEY,
+    DIFF_VALUE,
+} equal_result_t;
+
+equal_result_t map_string_equals(GHashTable *f, GHashTable *s)
+{
+    const guint fsize = g_hash_table_size(f);
+    const guint ssize = g_hash_table_size(s);
+    if (fsize != ssize)
+    {
+        fprintf(stdout, "instances are not equal in size: %u != %u\n", fsize, ssize);
+        return DIFF_SIZE;
+    }
+
+    GHashTableIter iter;
+    gpointer fkey = NULL;
+    gpointer fvalue = NULL;
+
+    g_hash_table_iter_init(&iter, f);
+    while(g_hash_table_iter_next(&iter, &fkey, &fvalue))
+    {
+        gpointer skey = NULL;
+        gpointer svalue = NULL;
+
+        if (!g_hash_table_lookup_extended(s, fkey, &skey, &svalue))
+        {
+            fprintf(stdout, "second misses key '%s'\n", (const char *)fkey);
+            return MISS_KEY;
+        }
+
+        if (strcmp((const char *)fvalue, (const char *)svalue) != 0)
+        {
+            fprintf(stdout, "a value of '%s' differs: '%s' != '%s'\n", (const char *)fkey, (const char *)fvalue, (const char *)svalue);
+            return DIFF_VALUE;
+        }
+    }
+
+    return EQUAL;
+}
+
+int main(int argc, char **argv)
+{
+    libreport_g_verbose = 3;
+
+    {
+        /* Self check */
+        g_autoptr(GHashTable) first = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        g_autoptr(GHashTable) second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+
+        assert(EQUAL == map_string_equals(first, first));
+        assert(EQUAL == map_string_equals(first, second));
+
+        g_hash_table_insert(first, g_strdup("first"), g_strdup("1"));
+        g_hash_table_insert(first, g_strdup("second"), g_strdup("2"));
+        g_hash_table_insert(first, g_strdup("third"), g_strdup("3"));
+
+        assert(EQUAL == map_string_equals(first, first));
+
+        assert(DIFF_SIZE == map_string_equals(first, second));
+        assert(DIFF_SIZE == map_string_equals(second, first));
+
+        g_hash_table_insert(second, g_strdup("first"), g_strdup("1"));
+        g_hash_table_insert(second, g_strdup("second"), g_strdup("2"));
+        g_hash_table_insert(second, g_strdup("third"), g_strdup("3"));
+
+        assert(EQUAL == map_string_equals(first, second));
+        assert(EQUAL == map_string_equals(second, first));
+
+        g_hash_table_insert(first, g_strdup("fifth"), g_strdup("5"));
+        g_hash_table_insert(second, g_strdup("fourth"), g_strdup("4"));
+
+        assert(MISS_KEY == map_string_equals(first, second));
+        assert(MISS_KEY == map_string_equals(second, first));
+
+        g_hash_table_insert(first, g_strdup("fourth"), g_strdup("4"));
+        g_hash_table_insert(second, g_strdup("fifth"), g_strdup("6"));
+
+        assert(DIFF_VALUE == map_string_equals(first, second));
+        assert(DIFF_VALUE == map_string_equals(second, first));
+    }
+
+    {
+        g_autoptr(GHashTable) first = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        g_autoptr(GHashTable) second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+
+        assert(!libreport_load_conf_file_from_dirs(CONF_NAME, NULL, second, 0));
+
+        assert(EQUAL == map_string_equals(first, second) || !"Not empty");
+    }
+
+    {
+        const char *const dir_vec[] = {
+            NULL,
+        };
+
+        g_autoptr(GHashTable) first = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        g_autoptr(GHashTable) second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+
+        assert(!libreport_load_conf_file_from_dirs(CONF_NAME, dir_vec, second, 0));
+
+        assert(EQUAL == map_string_equals(first, second) || !"Not empty");
+    }
+
+    {
+        const char *const dir_vec[] = {
+            DEFAULT_DIR,
+            NULL,
+        };
+
+        g_autoptr(GHashTable) first = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        libreport_load_conf_file(DEFAULT_DIR"/"CONF_NAME, first, 0);
+
+        g_autoptr(GHashTable) second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        assert(libreport_load_conf_file_from_dirs(CONF_NAME, dir_vec, second, 0));
+
+        assert(EQUAL == map_string_equals(first, second));
+    }
+
+    {
+        const char *const dir_vec[] = {
+            DEFAULT_DIR,
+            FIRST_DIR,
+            SECOND_DIR,
+            NULL,
+        };
+
+        g_autoptr(GHashTable) first = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        libreport_load_conf_file(DEFAULT_DIR"/"CONF_NAME, first, 0);
+        libreport_load_conf_file(FIRST_DIR"/"CONF_NAME, first, 0);
+        libreport_load_conf_file(SECOND_DIR"/"CONF_NAME, first, 0);
+
+        g_autoptr(GHashTable) second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        assert(libreport_load_conf_file_from_dirs(CONF_NAME, dir_vec, second, 0));
+
+        assert(EQUAL == map_string_equals(first, second));
+    }
+
+    {
+        const char *const dir_vec[] = {
+            DEFAULT_DIR,
+            "/foo/blah",
+            FIRST_DIR,
+            SECOND_DIR,
+            NULL,
+        };
+
+        g_autoptr(GHashTable) first = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        libreport_load_conf_file(DEFAULT_DIR"/"CONF_NAME, first, 0);
+        libreport_load_conf_file(FIRST_DIR"/"CONF_NAME, first, 0);
+        libreport_load_conf_file(SECOND_DIR"/"CONF_NAME, first, 0);
+
+        g_autoptr(GHashTable) second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        assert(!libreport_load_conf_file_from_dirs(CONF_NAME, dir_vec, second, 0));
+
+        assert(EQUAL == map_string_equals(first, second));
+    }
+
+    return 0;
+}
+]])
+
+## -------------------------------------- ##
+## libreport_load_conf_file_from_dirs_ext ##
+## -------------------------------------- ##
+
+AT_TESTFUN([libreport_load_conf_file_from_dirs_ext],
+[[
+#include "internal_libreport.h"
+
+#define CONF_NAME "file.conf"
+
+int main(void)
+{
+    libreport_g_verbose = 3;
+
+    {
+        const char *const dir_vec[] = {
+            "../../conf/second",
+            "/org/freedesktop/problems/invalid",
+            NULL,
+        };
+
+        int dir_flags_vec[] = {
+            CONF_DIR_FLAG_NONE,
+            CONF_DIR_FLAG_OPTIONAL,
+            -1,
+        };
+
+        g_autoptr(GHashTable) settings = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+
+        assert(libreport_load_conf_file_from_dirs_ext(CONF_NAME, dir_vec, dir_flags_vec, settings, 0));
+    }
+}
+]])
+
+
+
+## -------------------------##
+## libreport_save_conf_file ##
+## -------------------------##
+
+AT_TESTFUN([libreport_save_conf_file],
+[[
+#include "internal_libreport.h"
+
+#define CONF_NAME "file.conf"
+#define CUSTOM_CONF "../../conf/default/custom.conf"
+
+typedef enum equal_result
+{
+    EQUAL,
+    DIFF_SIZE,
+    MISS_KEY,
+    DIFF_VALUE,
+} equal_result_t;
+
+equal_result_t map_string_equals(GHashTable *f, GHashTable *s)
+{
+    const guint fsize = g_hash_table_size(f);
+    const guint ssize = g_hash_table_size(s);
+    if (fsize != ssize)
+    {
+        fprintf(stdout, "instances are not equal in size: %u != %u\n", fsize, ssize);
+        return DIFF_SIZE;
+    }
+
+    GHashTableIter iter;
+    gpointer fkey = NULL;
+    gpointer fvalue = NULL;
+
+    g_hash_table_iter_init(&iter, f);
+    while(g_hash_table_iter_next(&iter, &fkey, &fvalue))
+    {
+        gpointer skey = NULL;
+        gpointer svalue = NULL;
+
+        if (!g_hash_table_lookup_extended(s, fkey, &skey, &svalue))
+        {
+            fprintf(stdout, "second misses key '%s'\n", (const char *)fkey);
+            return MISS_KEY;
+        }
+
+        if (strcmp((const char *)fvalue, (const char *)svalue) != 0)
+        {
+            fprintf(stdout, "a value of '%s' differs: '%s' != '%s'\n", (const char *)fkey, (const char *)fvalue, (const char *)svalue);
+            return DIFF_VALUE;
+        }
+    }
+
+    return EQUAL;
+}
+
+int main(int argc, char **argv)
+{
+    libreport_g_verbose = 3;
+
+    {
+        /* Self check */
+        g_autoptr(GHashTable) first = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        g_autoptr(GHashTable) second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+
+        assert(EQUAL == map_string_equals(first, first));
+        assert(EQUAL == map_string_equals(first, second));
+
+        g_hash_table_insert(first, g_strdup("first"), g_strdup("1"));
+        g_hash_table_insert(first, g_strdup("second"), g_strdup("2"));
+        g_hash_table_insert(first, g_strdup("third"), g_strdup("3"));
+
+        assert(EQUAL == map_string_equals(first, first));
+
+        assert(DIFF_SIZE == map_string_equals(first, second));
+        assert(DIFF_SIZE == map_string_equals(second, first));
+
+        g_hash_table_insert(second, g_strdup("first"), g_strdup("1"));
+        g_hash_table_insert(second, g_strdup("second"), g_strdup("2"));
+        g_hash_table_insert(second, g_strdup("third"), g_strdup("3"));
+
+        assert(EQUAL == map_string_equals(first, second));
+        assert(EQUAL == map_string_equals(second, first));
+
+        g_hash_table_insert(first, g_strdup("fifth"), g_strdup("5"));
+        g_hash_table_insert(second, g_strdup("fourth"), g_strdup("4"));
+
+        assert(MISS_KEY == map_string_equals(first, second));
+        assert(MISS_KEY == map_string_equals(second, first));
+
+        g_hash_table_insert(first, g_strdup("fourth"), g_strdup("4"));
+        g_hash_table_insert(second, g_strdup("fifth"), g_strdup("6"));
+
+        assert(DIFF_VALUE == map_string_equals(first, second));
+        assert(DIFF_VALUE == map_string_equals(second, first));
+    }
+
+    {
+        g_autoptr(GHashTable) first = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        g_hash_table_insert(first, g_strdup("success"), g_strdup("total"));
+        g_hash_table_insert(first, g_strdup("failure"), g_strdup("none"));
+        g_hash_table_insert(first, g_strdup("effort"), g_strdup("minimal"));
+        g_hash_table_insert(first, g_strdup("state"), g_strdup("done"));
+
+        /* These commands must fail */
+        assert(!libreport_save_conf_file("/proc/cpuinfo/foo/blah/file.conf", first));
+        assert(!libreport_save_conf_file("../../../../../../../../../../../../../../../proc/cpuinfo/foo/blah/file.conf", first));
+        assert(!libreport_save_conf_file("/proc/cpuinfo/root/file.conf", first));
+
+        char tmpdir[] = "/tmp/libreport_save_conf_file.XXXXXX";
+
+        /* OK, I know that I should not use tmpnam() but I want to check */
+        /* that libreport_save_conf_file() creates the directory */
+        assert(tmpnam(tmpdir) != NULL);
+
+        g_autofree char *conf_path = g_build_filename(tmpdir, CONF_NAME, NULL);
+
+        assert(libreport_save_conf_file(conf_path, first) || !"Save in not existing directory");
+
+        {
+            g_autoptr(GHashTable) second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+            assert(libreport_load_conf_file(conf_path, second, 0) || !"Loaded from not existing directory");
+
+            assert(EQUAL == map_string_equals(first, second) || !"The loaded configuration equals to the saved configuration");
+        }
+
+        {
+            g_autoptr(GHashTable) second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+
+            unlink(CUSTOM_CONF);
+            assert(libreport_save_conf_file(CUSTOM_CONF, first) || !"Saved at relative path");
+            assert(libreport_load_conf_file(CUSTOM_CONF, second, 0) || !"Load the saved at relative path");
+
+            unlink(CUSTOM_CONF);
+
+            assert(EQUAL == map_string_equals(first, second) || !"The loaded configuration equals to the saved configuration");
+        }
+    }
+
+    {   /* Test that keys removed from the conf map are also removed from the corresponding file */
+        g_autoptr(GHashTable) first = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        g_hash_table_insert(first, g_strdup("success"), g_strdup("total"));
+        g_hash_table_insert(first, g_strdup("failure"), g_strdup("none"));
+        g_hash_table_insert(first, g_strdup("effort"), g_strdup("minimal"));
+        g_hash_table_insert(first, g_strdup("state"), g_strdup("done"));
+
+        unlink(CUSTOM_CONF);
+        assert(libreport_save_conf_file(CUSTOM_CONF, first) || !"Saved at relative path");
+
+        g_hash_table_remove(first, "failure");
+        g_hash_table_remove(first, "state");
+        assert(libreport_save_conf_file(CUSTOM_CONF, first) || !"Saved updated configuration");
+
+        GHashTable *second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        assert(libreport_load_conf_file(CUSTOM_CONF, second, 0) || !"Load the updated conf from relative path");
+
+        assert(EQUAL == map_string_equals(first, second) || !"The loaded configuration equals to the saved configuration");
+        g_hash_table_destroy(second);
+
+        g_hash_table_remove(first, "success");
+        g_hash_table_remove(first, "effort");
+        assert(libreport_save_conf_file(CUSTOM_CONF, first) || !"Saved empty configuration");
+
+        second = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+        assert(libreport_load_conf_file(CUSTOM_CONF, second, 0) || !"Load the empty conf from relative path");
+
+        assert(EQUAL == map_string_equals(first, second) || !"The loaded configuration equals to the empty configuration");
+        g_hash_table_destroy(second);
+
+        unlink(CUSTOM_CONF);
+    }
+
+    return 0;
+}
+]])
+

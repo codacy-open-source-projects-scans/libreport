@@ -1,0 +1,239 @@
+# -*- Autotest -*-
+
+AT_BANNER([global_config])
+
+## ------------------------ ##
+## always_excluded_elements ##
+## ------------------------ ##
+
+AT_TESTFUN([always_excluded_elements],
+[[
+#include "internal_libreport.h"
+#include <errno.h>
+#include <assert.h>
+
+int main(int argc, char **argv)
+{
+    libreport_g_verbose = 3;
+    char cwd_buf[PATH_MAX + 1];
+
+    static const char *dirs[] = {
+        NULL,
+        NULL,
+    };
+    dirs[0] = getcwd(cwd_buf, sizeof(cwd_buf));
+
+    static int dir_flags[] = {
+        CONF_DIR_FLAG_NONE,
+        -1,
+    };
+
+    unlink("libreport.conf");
+    FILE *lrf = fopen("libreport.conf", "wx");
+    assert(lrf != NULL);
+    fclose(lrf);
+
+    assert(libreport_load_global_configuration_from_dirs(dirs, dir_flags));
+
+    {
+        unsetenv("EXCLUDE_FROM_REPORT");
+        string_vector_ptr_t excluded = libreport_get_global_always_excluded_elements();
+
+        assert(excluded != NULL);
+        assert(excluded[0] == NULL);
+
+        g_strfreev(excluded);
+    }
+
+    {
+        setenv("EXCLUDE_FROM_REPORT", "hostname, environ, uid", 1);
+        string_vector_ptr_t excluded = libreport_get_global_always_excluded_elements();
+
+        assert(excluded != NULL);
+        assert(strcmp(excluded[0], "hostname") == 0);
+        assert(strcmp(excluded[1], "environ") == 0);
+        assert(strcmp(excluded[2], "uid") == 0);
+        assert(excluded[3] == NULL);
+
+        g_strfreev(excluded);
+    }
+
+    libreport_free_global_configuration();
+
+    unlink("libreport.conf");
+    lrf = fopen("libreport.conf", "wx");
+    assert(lrf != NULL);
+    fprintf(lrf, "AlwaysExcludedElements = maps, var_log_messages, proc_pid_status");
+    fclose(lrf);
+
+    assert(libreport_load_global_configuration_from_dirs(dirs, dir_flags));
+
+    {
+        unsetenv("EXCLUDE_FROM_REPORT");
+        string_vector_ptr_t excluded = libreport_get_global_always_excluded_elements();
+
+        assert(excluded != NULL);
+        assert(strcmp(excluded[0], "maps") == 0);
+        assert(strcmp(excluded[1], "var_log_messages") == 0);
+        assert(strcmp(excluded[2], "proc_pid_status") == 0);
+        assert(excluded[3] == NULL);
+
+        g_strfreev(excluded);
+    }
+
+    {
+        setenv("EXCLUDE_FROM_REPORT", "hostname, environ, uid", 1);
+        string_vector_ptr_t excluded = libreport_get_global_always_excluded_elements();
+
+        assert(excluded != NULL);
+        assert(strcmp(excluded[0], "hostname") == 0);
+        assert(strcmp(excluded[1], "environ") == 0);
+        assert(strcmp(excluded[2], "uid") == 0);
+        assert(strcmp(excluded[3], "maps") == 0);
+        assert(strcmp(excluded[4], "var_log_messages") == 0);
+        assert(strcmp(excluded[5], "proc_pid_status") == 0);
+        assert(excluded[6] == NULL);
+
+        g_strfreev(excluded);
+    }
+
+    unlink("libreport.conf");
+
+    return EXIT_SUCCESS;
+}
+]])
+
+
+## --------------------- ##
+## create_private_ticket ##
+## --------------------- ##
+
+AT_TESTFUN([create_private_ticket],
+[[
+#include "testsuite.h"
+
+TS_MAIN
+{
+    char cwd_buf[PATH_MAX + 1];
+    static const char *dirs[] = {
+        NULL,
+        NULL,
+    };
+    dirs[0] = getcwd(cwd_buf, sizeof(cwd_buf));
+
+    static int dir_flags[] = {
+        CONF_DIR_FLAG_NONE,
+        -1,
+    };
+
+    unlink("libreport.conf");
+    FILE *lrf = fopen("libreport.conf", "wx");
+    assert(lrf != NULL);
+    fclose(lrf);
+
+    assert(libreport_load_global_configuration_from_dirs(dirs, dir_flags));
+
+    TS_ASSERT_FALSE_MESSAGE(libreport_get_global_create_private_ticket(), "False by default");
+
+    libreport_set_global_create_private_ticket(false, 0);
+
+    TS_ASSERT_FALSE_MESSAGE(libreport_get_global_create_private_ticket(), "Still false");
+
+    libreport_set_global_create_private_ticket(true, 0);
+
+    TS_ASSERT_TRUE_MESSAGE(libreport_get_global_create_private_ticket(), "Configuration accepted");
+    TS_ASSERT_STRING_EQ(getenv(CREATE_PRIVATE_TICKET), "1", "Correct ENVIRONMENT value");
+
+    libreport_set_global_create_private_ticket(true, 0);
+
+    TS_ASSERT_TRUE_MESSAGE(libreport_get_global_create_private_ticket(), "Configuration sanity");
+    TS_ASSERT_STRING_EQ(getenv(CREATE_PRIVATE_TICKET), "1", "Correct ENVIRONMENT value");
+
+    libreport_set_global_create_private_ticket(false, 0);
+
+    TS_ASSERT_FALSE_MESSAGE(libreport_get_global_create_private_ticket(), "Reverted back to False");
+    TS_ASSERT_STRING_NULL_OR_EMPTY(getenv(CREATE_PRIVATE_TICKET), "Correct ENVIRONMENT value");
+
+    g_setenv(CREATE_PRIVATE_TICKET, "1", TRUE);
+
+    TS_ASSERT_TRUE_MESSAGE(libreport_get_global_create_private_ticket(), "Loaded from environment");
+
+    unsetenv(CREATE_PRIVATE_TICKET);
+
+    TS_ASSERT_FALSE_MESSAGE(libreport_get_global_create_private_ticket(), "Reflects environment");
+
+    g_setenv(CREATE_PRIVATE_TICKET, "0", TRUE);
+
+    TS_ASSERT_FALSE_MESSAGE(libreport_get_global_create_private_ticket(), "Zero is false");
+
+    libreport_free_global_configuration();
+}
+TS_RETURN_MAIN
+]])
+
+
+## ---------------------- ##
+## stop_on_not_reportable ##
+## ---------------------- ##
+
+AT_TESTFUN([stop_on_not_reportable], [[
+#include "testsuite.h"
+
+TS_MAIN
+{
+    char cwd_buf[PATH_MAX + 1];
+    static const char *dirs[] = {
+        NULL,
+        NULL,
+    };
+    dirs[0] = getcwd(cwd_buf, sizeof(cwd_buf));
+
+    static int dir_flags[] = {
+        CONF_DIR_FLAG_NONE,
+        -1,
+    };
+
+    unlink("libreport.conf");
+    FILE *lrf = fopen("libreport.conf", "wx");
+    assert(lrf != NULL);
+    fclose(lrf);
+
+    assert(libreport_load_global_configuration_from_dirs(dirs, dir_flags));
+
+    TS_ASSERT_TRUE_MESSAGE(libreport_get_global_stop_on_not_reportable(), "True by default");
+
+    libreport_set_global_stop_on_not_reportable(true, 0);
+
+    TS_ASSERT_TRUE_MESSAGE(libreport_get_global_stop_on_not_reportable(), "Still true");
+
+    libreport_set_global_stop_on_not_reportable(false, 0);
+
+    TS_ASSERT_FALSE_MESSAGE(libreport_get_global_stop_on_not_reportable(), "Configuration accepted");
+    TS_ASSERT_STRING_EQ(getenv(STOP_ON_NOT_REPORTABLE), "0", "Correct ENVIRONMENT value");
+
+    libreport_set_global_stop_on_not_reportable(true, 0);
+
+    TS_ASSERT_TRUE_MESSAGE(libreport_get_global_stop_on_not_reportable(), "Configuration sanity");
+    TS_ASSERT_STRING_EQ(getenv(STOP_ON_NOT_REPORTABLE), "1", "Correct ENVIRONMENT value");
+
+    libreport_set_global_stop_on_not_reportable(false, 0);
+
+    TS_ASSERT_FALSE_MESSAGE(libreport_get_global_stop_on_not_reportable(), "Reverted back to False");
+    TS_ASSERT_STRING_EQ(getenv(STOP_ON_NOT_REPORTABLE), "0", "Correct ENVIRONMENT value");
+
+    g_setenv(STOP_ON_NOT_REPORTABLE, "1", TRUE);
+
+    TS_ASSERT_TRUE_MESSAGE(libreport_get_global_stop_on_not_reportable(), "Loaded from environment");
+
+    unsetenv(STOP_ON_NOT_REPORTABLE);
+
+    TS_ASSERT_TRUE_MESSAGE(libreport_get_global_stop_on_not_reportable(), "Reflects environment");
+
+    g_setenv(STOP_ON_NOT_REPORTABLE, "0", TRUE);
+
+    TS_ASSERT_FALSE_MESSAGE(libreport_get_global_stop_on_not_reportable(), "Zero is false");
+
+    libreport_free_global_configuration();
+}
+TS_RETURN_MAIN
+]])

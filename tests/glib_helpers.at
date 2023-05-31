@@ -1,0 +1,45 @@
+# -*- Autotest -*-
+
+AT_BANNER([glib helpers])
+
+## ------------ ##
+## parse a list ##
+## ------------ ##
+
+AT_TESTFUN([libreport_parse_delimited_list],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+
+int test(const char *list, const char *delimiter, const char *strings[])
+{
+    GList *l = libreport_parse_delimited_list(list, delimiter);
+    GList *start = l;
+
+    char **tmp = (char **)strings;
+    int retval = 0;
+
+    while(l != NULL) {
+        log_warning("is: '%s'", (char *)l->data);
+        log_warning("should be: '%s'", *tmp);
+        retval |= strcmp((char *)l->data, *(tmp++)) != 0;
+        if (retval)
+            break; // no need to continue further
+        l = g_list_next(l);
+    }
+
+    g_list_free_full(start, g_free);
+
+    return retval;
+}
+
+int main(void)
+{
+    const char *new_line_list = "hello \n world \n fedora \n redhat";
+    const char *colon_list = "hello:world:fedora:redhat";
+    const char *strings[] = {"hello", "world", "fedora", "redhat"};
+
+    assert(test(new_line_list, "\n", strings) == 0);
+    assert(test(colon_list, ":", strings) == 0);
+}
+]])

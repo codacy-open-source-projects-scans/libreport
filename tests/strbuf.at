@@ -1,0 +1,26 @@
+# -*- Autotest -*-
+
+AT_BANNER([strbuf])
+
+
+## --------------------- ##
+## libreport_strremovech ##
+## --------------------- ##
+
+AT_TESTFUN([libreport_strremovech],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+int main(void)
+{
+    char test[] = "Hello , world!";
+
+    if (strcmp(libreport_strremovech(test, ' '), "Hello,world!") != 0)
+    {
+        fprintf(stderr, "Expected: 'Hello,world!'\nResult  : '%s'", test);
+        assert(!"Failed to remove space");
+    }
+
+    return 0;
+}
+]])

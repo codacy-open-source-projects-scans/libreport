@@ -1,0 +1,129 @@
+AT_BANNER([report_result])
+
+AT_TESTFUN([report_result_parse], [[
+#include <internal_libreport.h>
+
+int main(void)
+{
+    g_autoptr(report_result_t) result = NULL;
+    char *field = NULL;
+
+    result = report_result_parse("Test: URL=https://retrace.fedoraproject.org WORKFLOW=workflow_FedoraCCpp MSG=Just a message!", 4);
+    field = report_result_get_label(result);
+    g_assert_cmpstr(field, ==, "Test");
+    g_free(field);
+    field = report_result_get_url(result);
+    g_assert_cmpstr(field, ==, "https://retrace.fedoraproject.org");
+    g_free(field);
+    field = report_result_get_workflow(result);
+    g_assert_cmpstr(field, ==, "workflow_FedoraCCpp");
+    g_free(field);
+    field = report_result_get_message(result);
+    g_assert_cmpstr(field, ==, "Just a message!");
+    g_free(field);
+
+    return EXIT_SUCCESS;
+}
+]])
+
+AT_TESTFUN([report_result_to_string], [[
+#include <internal_libreport.h>
+
+bool string_cmp(const char *orig, const char *other)
+{
+    if (strcmp(orig, other) == 0)
+        return true;
+
+    printf("Exp: '%s'\nGot: '%s'\n", orig, other);
+    return false;
+}
+
+int main(void)
+{
+    report_result_t *result;
+    GString *strbuf;
+
+    libreport_g_verbose=3;
+
+    setenv("TZ", "", 1);
+    setenv("LC_ALL", "C", 1);
+
+    result = report_result_new_with_label(NULL);
+    assert(NULL == result || !"Null label");
+
+    result = report_result_new_with_label("");
+    assert(NULL == result || !"Blank label");
+
+    result = report_result_new_with_label("Foo:");
+    assert(NULL == result || !"Label with colon");
+
+    result = report_result_new_with_label("Foo = Bar");
+    assert(NULL != result || !"Label with equals sign and whitespace");
+    strbuf = report_result_to_string(result);
+    assert(NULL != strbuf);
+    assert(string_cmp("Foo = Bar:", strbuf->str));
+
+    g_string_free(strbuf, TRUE);
+    report_result_free(result);
+
+    result = report_result_new_with_label("OnlyURL");
+    report_result_set_url(result, "http://test1.com");
+    strbuf = report_result_to_string(result);
+    assert(NULL != strbuf || !"Only URL");
+    assert(string_cmp("OnlyURL: URL=http://test1.com", strbuf->str));
+
+    g_string_free(strbuf, TRUE);
+    report_result_free(result);
+
+    result = report_result_new_with_label("OnlyBTHASH");
+    report_result_set_bthash(result, "0123456789ABCDEF");
+    strbuf = report_result_to_string(result);
+    assert(NULL != strbuf || !"Only BTHASH");
+    assert(string_cmp("OnlyBTHASH: BTHASH=0123456789ABCDEF", strbuf->str));
+
+    g_string_free(strbuf, TRUE);
+    report_result_free(result);
+
+    result = report_result_new_with_label("OnlyMSG");
+    report_result_set_message(result, "Message = foo: bar!");
+    strbuf = report_result_to_string(result);
+    assert(NULL != strbuf || !"Only MSG");
+    assert(string_cmp("OnlyMSG: MSG=Message = foo: bar!", strbuf->str));
+
+    g_string_free(strbuf, TRUE);
+    report_result_free(result);
+
+    result = report_result_new_with_label("OnlyTIME");
+    report_result_set_timestamp(result, 946684800);
+    strbuf = report_result_to_string(result);
+    assert(NULL != strbuf || !"Only TIME");
+    assert(string_cmp("OnlyTIME: TIME=2000-01-01-00:00:00", strbuf->str));
+
+    g_string_free(strbuf, TRUE);
+    report_result_free(result);
+
+    result = report_result_new_with_label("OnlyWORKFLOW");
+    report_result_set_workflow(result, "workflow_FedoraCCpp");
+    strbuf = report_result_to_string(result);
+    assert(NULL != strbuf || !"Only WORKFLOW");
+    assert(string_cmp("OnlyWORKFLOW: WORKFLOW=workflow_FedoraCCpp", strbuf->str));
+
+    g_string_free(strbuf, TRUE);
+    report_result_free(result);
+
+    result = report_result_new_with_label("Everything");
+    report_result_set_bthash(result, "0123456789ABCDEF");
+    report_result_set_message(result, "Exhaustive libreport test!");
+    report_result_set_timestamp(result, 946684800);
+    report_result_set_url(result, "http://epic.win");
+    report_result_set_workflow(result, "workflow_FedoraCCpp");
+    strbuf = report_result_to_string(result);
+    assert(NULL != strbuf || !"Everything");
+    assert(string_cmp("Everything: TIME=2000-01-01-00:00:00 URL=http://epic.win BTHASH=0123456789ABCDEF WORKFLOW=workflow_FedoraCCpp MSG=Exhaustive libreport test!", strbuf->str));
+
+    g_string_free(strbuf, TRUE);
+    report_result_free(result);
+
+    return EXIT_SUCCESS;
+}
+]])
