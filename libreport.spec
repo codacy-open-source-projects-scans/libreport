@@ -14,7 +14,7 @@
 
 Summary: Generic library for reporting various problems
 Name: libreport
-Version: 2.17.10
+Version: 2.17.11
 Release: 1%{?dist}
 License: GPL-2.0-or-later
 URL: https://abrt.readthedocs.org/
@@ -110,6 +110,8 @@ Requires: libreport >= %{version}-%{distfreerelease}
 Requires: libreport = %{version}-%{release}
 %endif
 Requires: python3-dnf
+Requires: python3-requests
+Requires: python3-urllib3
 %{?python_provide:%python_provide python3-libreport}
 
 %description -n python3-libreport
