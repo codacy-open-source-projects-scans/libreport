@@ -1,0 +1,76 @@
+# -*- Autotest -*-
+
+AT_BANNER([libreport types])
+
+## ------------- ##
+## string_vector ##
+## ------------- ##
+
+AT_TESTFUN([string_vector],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+
+int main(int argc, char **argv)
+{
+    libreport_g_verbose = 3;
+
+    const char *const raw_value = "foo, blah, bang";
+    string_vector_ptr_t vector = g_strsplit(raw_value, ", ", 0);
+
+    assert(strcmp("foo", vector[0]) == 0 || !"The first item");
+    assert(strcmp("blah", vector[1]) == 0 || !"The second item");
+    assert(strcmp("bang", vector[2]) == 0 || !"The third item");
+    assert(NULL == vector[3] || !"NULL-terminated");
+
+    g_strfreev(vector);
+
+    vector = g_strsplit("", ", ", 0);
+    assert(NULL == vector[0] || !"NULL-terminated");
+
+    g_strfreev(vector);
+
+    vector = g_strsplit("", ", ", 0);
+    assert(NULL == vector[0] || !"NULL-terminated");
+
+    g_strfreev(vector);
+}
+]])
+
+## ----------------------------------- ##
+## map_string_get_set_as_various_types ##
+## ----------------------------------- ##
+
+AT_TESTFUN([map_string_get_set_as_various_types],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+
+int main(int argc, char **argv)
+{
+    libreport_g_verbose = 3;
+
+    {
+        const char *const key = "my_bool";
+        GHashTable *map = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
+
+        int retval = 0;
+
+        assert(!libreport_try_get_map_string_item_as_bool(map, key, &retval) || !"Returns bool(0) even if option does not exist");
+        assert(retval == 0 || !"Modifies bool(0) return value on failure");
+
+        retval = 1;
+
+        assert(!libreport_try_get_map_string_item_as_bool(map, key, &retval) || !"Returns bool(1) even if option does not exist");
+        assert(retval == 1 || !"Modifies bool(1) return value on failure");
+
+        g_hash_table_replace(map, g_strdup(key), g_strdup("foo"));
+        retval = 1;
+        assert(libreport_try_get_map_string_item_as_bool(map, key, &retval) || !"Can not convert a random string to bool(0)");
+        assert(!retval || !"Failed to convert a random string to bool(0)");
+
+        if (map)
+            g_hash_table_destroy(map);
+    }
+}
+]])

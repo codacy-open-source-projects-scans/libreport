@@ -1,0 +1,145 @@
+# -*- Autotest -*-
+
+AT_BANNER([report_python])
+
+## ------------------------- ##
+## arbitrary_etc_os_releases ##
+## ------------------------- ##
+
+AT_PYTESTFUN([arbitrary_etc_os_releases],
+[[import sys
+import tempfile
+import os
+
+sys.path.insert(0, "../../../src/report-python")
+sys.path.insert(0, "../../../src/report-python/report/.libs")
+
+report = __import__("report", globals(), locals(), [], 0)
+sys.modules["report"] = report
+
+
+PRODUCT_TEST_CASES = [
+    ("REDHAT_BUGZILLA_PRODUCT", "bugzilla-product"),
+    ("REDHAT_SUPPORT_PRODUCT", "support-product"),
+    ("NAME", "os-name")
+]
+
+VERSION_TEST_CASES = [
+    ("REDHAT_BUGZILLA_PRODUCT_VERSION", "bugzilla-product-version"),
+    ("REDHAT_SUPPORT_PRODUCT_VERSION", "support-product-version"),
+    ("VERSION_ID", "os-version-id")
+]
+
+def run_test(fields, getter, expected):
+    retval = True
+
+    osrelf = tempfile.NamedTemporaryFile(delete=False)
+    osrelf.write("ID=\"field-id\"\n".encode())
+
+    for (field, value) in fields:
+        osrelf.write(("%s=%s\n" %(field, value)).encode())
+
+    osrelf.write("PRETTY_NAME=\"field-pretty-name\"\n".encode())
+    osrelf.close()
+
+    result = getter(file_path=osrelf.name)
+    if result != expected:
+        print("expected: '%s'" % (expected))
+        print("result  : '%s'" % (result))
+        retval = False
+
+    os.remove(osrelf.name)
+    return retval
+
+
+def verify_information_type(test_cases, stuffing, getter):
+    retval = 0
+    for i in range(0, len(test_cases)):
+        for j in range(len(test_cases), i, -1):
+            if not run_test(stuffing + test_cases[i:j], getter, test_cases[i][1]):
+                print("field   : '%s'" % (test_cases[i][0]))
+                retval += 1
+
+
+def main():
+    verify_information_type(PRODUCT_TEST_CASES, VERSION_TEST_CASES, report.getProduct_fromOSRELEASE)
+    verify_information_type(VERSION_TEST_CASES, PRODUCT_TEST_CASES, report.getVersion_fromOSRELEASE)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+]])
+
+## ----------------------- ##
+## get_from_etc_os_release ##
+## ----------------------- ##
+
+AT_PYTESTFUN([get_from_etc_os_release],
+[[import sys
+
+sys.path.insert(0, "../../../src/report-python")
+sys.path.insert(0, "../../../src/report-python/report/.libs")
+
+report = __import__("report", globals(), locals(), [], 0)
+sys.modules["report"] = report
+
+import os
+
+if not os.path.exists("/etc/os-release"):
+    print("Cannot run the test: '/etc/os-release' does not exist")
+    sys.exit(1)
+
+exit_code = 0
+if report.getProduct_fromOSRELEASE() != report.getProduct():
+    print("getProduct('{0}') did not return PRODUCT='{1}' from /etc/os-release".format(report.getProduct(), report.getProduct_fromOSRELEASE()))
+    exit_code += 1
+
+if report.getVersion_fromOSRELEASE() != report.getVersion():
+    print("getVersion('{0}') did not return PRODUCT_VERSION='{1}' from /etc/os-release".format(report.getVersion(), report.getVersion_fromOSRELEASE()))
+    exit_code += 1
+
+if exit_code != 0:
+    print("++++ /etc/os-release ++++")
+    with open("/etc/os-release") as osrel:
+        sys.stdout.write(osrel.read())
+    print("^^^^ /etc/os-release ^^^^")
+
+sys.exit(exit_code)
+]])
+
+## ---------------------------------- ##
+## create_dump_dir_uid_does_not_exist ##
+## ---------------------------------- ##
+
+AT_PYTESTFUN([create_dump_dir_uid_does_not_exist],
+[[import sys
+
+sys.path.insert(0, "../../../src/report-python")
+sys.path.insert(0, "../../../src/report-python/report/.libs")
+
+report = __import__("report", globals(), locals(), [], 0)
+sys.modules["report"] = report
+
+import os
+
+cd = report.problem_data()
+cd.add_basics()
+dd = cd.create_dump_dir("/tmp/")
+print("dumpdir name:", dd.name)
+
+stat_info = os.stat(dd.name)
+uid = stat_info.st_uid
+gid = stat_info.st_gid
+print("user uid", os.getuid())
+print("user gid", os.getgid())
+print("dumpdir uid: ", uid," gid: ",  gid)
+
+exit_code = 0
+if os.getuid() != uid:
+    exit_code += 1
+
+if os.getgid() != gid:
+    exit_code += 1
+
+sys.exit(exit_code)
+]])

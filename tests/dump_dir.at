@@ -1,0 +1,2034 @@
+# -*- Autotest -*-
+
+AT_BANNER([dump_dir])
+
+## --------- ##
+## dd_sanity ##
+## --------- ##
+
+AT_TESTFUN([dd_sanity],
+[[
+#include "testsuite.h"
+
+void validate_dump_dir_contents(struct dump_dir *dd)
+{
+    int items = 0;
+    assert(dd_exist(dd, FILENAME_TIME));
+    ++items;
+
+    assert(dd_exist(dd, FILENAME_KERNEL));
+    ++items;
+
+    assert(dd_exist(dd, FILENAME_HOSTNAME));
+    ++items;
+
+    assert(dd_exist(dd, FILENAME_ARCHITECTURE));
+    ++items;
+
+    assert(dd_exist(dd, FILENAME_OS_INFO));
+    ++items;
+
+    assert(dd_exist(dd, FILENAME_OS_RELEASE));
+    ++items;
+
+    assert(dd_exist(dd, FILENAME_OS_RELEASE));
+    ++items;
+
+    assert(dd_exist(dd, FILENAME_TYPE));
+    ++items;
+
+    assert(dd_exist(dd, FILENAME_LAST_OCCURRENCE));
+    ++items;
+
+    assert(dd_exist(dd, "at_test_text"));
+    assert(dd_get_item_size(dd, "at_test_text") == 3);
+    ++items;
+
+    assert(dd_exist(dd, "at_test_binary"));
+    assert(dd_get_item_size(dd, "at_test_binary") == 4);
+    ++items;
+
+    struct stat srv_buf;
+    stat("/etc/services", &srv_buf);
+
+    assert(dd_exist(dd, "at_test_services"));
+    assert(dd_get_item_size(dd, "at_test_services") == srv_buf.st_size);
+    ++items;
+
+    struct stat grp_buf;
+    stat("/etc/group", &grp_buf);
+    assert(dd_exist(dd, "at_test_group"));
+    assert(dd_get_item_size(dd, "at_test_group") == grp_buf.st_size);
+    ++items;
+
+    struct stat pwd_buf;
+    stat("/etc/passwd", &pwd_buf);
+    assert(dd_exist(dd, "at_test_passwd"));
+    assert(dd_get_item_size(dd, "at_test_passwd") == pwd_buf.st_size);
+    ++items;
+
+    dd_save_text(dd, "at_test_to_delete", "deleted");
+    assert(dd_exist(dd, "at_test_to_delete"));
+    dd_delete_item(dd, "at_test_to_delete");
+    assert(!dd_exist(dd, "at_test_to_delete"));
+
+    DIR *d1 = dd_init_next_file(dd);
+    assert(d1 != NULL);
+
+    int items_counter = 0;
+    char *short_name, *full_name;
+    while (dd_get_next_file(dd, &short_name, &full_name))
+    {
+        ++items_counter;
+
+        TS_ASSERT_PTR_IS_NOT_NULL(short_name);
+        TS_ASSERT_PTR_IS_NOT_NULL(full_name);
+        TS_ASSERT_STRING_EQ(short_name, (strrchr(full_name, '/') + 1), NULL);
+        TS_ASSERT_STRING_BEGINS_WITH(full_name, dd->dd_dirname, NULL);
+        TS_ASSERT_CHAR_EQ_MESSAGE(full_name[strlen(dd->dd_dirname)], '/', full_name);
+        g_free(short_name);
+        g_free(full_name);
+    }
+
+    TS_ASSERT_SIGNED_EQ(items, items_counter);
+    TS_ASSERT_SIGNED_EQ(dd_get_items_count(dd), items);
+    TS_ASSERT_PTR_IS_NULL(dd->next_dir);
+    TS_ASSERT_SIGNED_EQ(dd_get_next_file(dd, NULL, NULL), 0);
+
+    DIR *iterator_second_run = dd_init_next_file(dd);
+    TS_ASSERT_PTR_IS_NOT_NULL(iterator_second_run);
+
+    while (dd_get_next_file(dd, &short_name, &full_name))
+    {
+        --items_counter;
+        g_free(short_name);
+        g_free(full_name);
+    }
+
+    TS_ASSERT_SIGNED_OP_MESSAGE(items_counter, ==, 0, "Second run iterator goes through all items");
+
+    DIR *iterator_third_run = dd_init_next_file(dd);
+    TS_ASSERT_PTR_IS_NOT_NULL(iterator_third_run);
+    TS_ASSERT_PTR_IS_NOT_NULL(dd->next_dir);
+    dd_clear_next_file(dd);
+    TS_ASSERT_PTR_IS_NULL(dd->next_dir);
+    TS_ASSERT_SIGNED_OP_MESSAGE(dd_get_next_file(dd, NULL, NULL), ==, 0, "dd_clear_next_file(dd) stops iteration");
+}
+
+TS_MAIN
+{
+    char template[] = "/tmp/XXXXXX/dump_dir";
+
+    char *last_slash = strrchr(template, '/');
+    *last_slash = '\0';
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    *last_slash = '/';
+
+    printf("Dump dir path: %s\n", template);
+
+    fprintf(stderr, "Create new dump directory\n");
+    struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+    assert(dd != NULL || !"Cannot create new dump directory");
+
+    dd_create_basic_files(dd, geteuid(), NULL);
+    dd_save_text(dd, FILENAME_TYPE, "attest");
+
+    dd_save_text(dd, "at_test_text", "foo");
+    assert(dd_exist(dd, "at_test_text"));
+
+    dd_save_binary(dd, "at_test_binary", "blah", 4);
+    assert(dd_exist(dd, "at_test_binary"));
+
+    dd_copy_file(dd, "at_test_services", "/etc/services");
+
+    const int etc_dir_fd = open("/etc", O_DIRECTORY | O_PATH | O_CLOEXEC | O_EXCL);
+    assert(etc_dir_fd >= 0);
+    dd_copy_file_at(dd, "at_test_group", etc_dir_fd, "group");
+    close(etc_dir_fd);
+
+    int passwd_fd = open("/etc/passwd", O_RDONLY);
+    assert(passwd_fd >= 0);
+    dd_copy_fd(dd, "at_test_passwd", passwd_fd, 0, 0);
+    close(passwd_fd);
+
+    fprintf(stderr, "Test newly created dump directory\n");
+    validate_dump_dir_contents(dd);
+    dd_close(dd);
+
+
+    fprintf(stderr, "Test opened dump directory\n");
+    dd = dd_opendir(template, /*for writing*/0);
+    assert(dd != NULL || !"Cannot open the dump directory");
+    validate_dump_dir_contents(dd);
+    dd_close(dd);
+
+
+    fprintf(stderr, "Test renamed dump directory\n");
+    dd = dd_opendir(template, /*for writing*/0);
+    assert(dd != NULL || !"Cannot open the dump directory second time");
+
+    *(last_slash+1) = 'X';
+    assert(dd_rename(dd, template) == 0 || !"Cannot rename the dump directory");
+
+    validate_dump_dir_contents(dd);
+    dd_close(dd);
+
+
+    fprintf(stderr, "Test opened renamed dump directory\n");
+    assert(dd != NULL || !"Cannot open the renamed dump directory");
+    dd = dd_opendir(template, /*for writing*/0);
+    validate_dump_dir_contents(dd);
+
+    assert(dd_delete(dd) == 0);
+
+    *last_slash = '\0';
+    assert(rmdir(template) == 0);
+}
+TS_RETURN_MAIN
+]])
+
+## --------------------- ##
+## dd_create_open_delete ##
+## --------------------- ##
+
+AT_TESTFUN([dd_create_open_delete],
+[[
+#include "internal_libreport.h"
+#include <errno.h>
+#include <assert.h>
+
+int main(int argc, char **argv)
+{
+    libreport_g_verbose = 3;
+
+    char template[] = "/tmp/XXXXXX/dump_dir";
+
+    char *last_slash = strrchr(template, '/');
+    *last_slash = '\0';
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    *last_slash = '/';
+
+    struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+    assert(strcmp(dd->dd_dirname, template) == 0);
+    assert(dd->dd_fd >= 0);
+    assert(dd->dd_md_fd >= 0);
+
+    struct stat dd_st;
+    assert(fstat(dd->dd_fd, &dd_st) == 0);
+
+    struct stat md_st;
+    assert(fstat(dd->dd_md_fd, &md_st) == 0);
+
+    assert(dd_st.st_uid == md_st.st_uid);
+    assert(dd_st.st_gid == md_st.st_gid);
+    assert((dd_st.st_mode & 0666) == (md_st.st_mode & 0666));
+
+    struct stat path_md_st;
+    assert(fstatat(dd->dd_fd, ".libreport", &path_md_st, 0) == 0);
+    assert(md_st.st_ino = path_md_st.st_ino);
+
+    struct stat owner_md_st;
+    assert(fstatat(dd->dd_md_fd, "owner", &owner_md_st, 0) == 0);
+    assert((dd_st.st_mode & 0666) == (owner_md_st.st_mode & 0666));
+    assert(geteuid() == dd_get_owner(dd));
+    assert(errno == 0);
+
+    dd_create_basic_files(dd, (uid_t)-1, NULL);
+    dd_save_text(dd, FILENAME_TYPE, "attest");
+
+    dd_close(dd);
+    dd = NULL;
+
+    dd = dd_opendir(template, 0);
+    assert(dd != NULL);
+    assert(strcmp(dd->dd_dirname, template) == 0);
+    assert(dd->dd_fd >= 0);
+    assert(dd->dd_md_fd < 0);
+
+    dd_delete(dd);
+
+    assert(stat(template, &dd_st) != 0);
+
+    *last_slash = '\0';
+    assert(rmdir(template) == 0);
+    return EXIT_SUCCESS;
+}
+]])
+
+## -------------------------- ##
+## dd_sanitize_mode_and_owner ##
+## -------------------------- ##
+
+AT_TESTFUN([dd_sanitize_mode_and_owner],
+[[
+#include "internal_libreport.h"
+#include <errno.h>
+#include <assert.h>
+
+int main(int argc, char **argv)
+{
+    libreport_g_verbose = 3;
+
+    char template[] = "/tmp/XXXXXX/dump_dir";
+
+    char *last_slash = strrchr(template, '/');
+    *last_slash = '\0';
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    *last_slash = '/';
+
+    /* Prepare a directory for chmod test, use mode 0600 and chmod it to 0640 */
+    struct dump_dir *dd = dd_create(template, (uid_t)-1, 0600);
+    assert(dd != NULL);
+
+    {
+        struct stat path_md_st;
+        assert((fstatat(dd->dd_fd, ".libreport", &path_md_st, 0) == 0) || !"Failed initialize meta-data");
+        assert((path_md_st.st_mode & 0077) == 0);
+    }
+
+    dd_create_basic_files(dd, (uid_t)-1, NULL);
+    dd_save_text(dd, FILENAME_TYPE, "attest");
+
+    dd_close(dd);
+
+    /* initialize meta-data */
+    dd = dd_opendir(template, DD_OPEN_FD_ONLY);
+    /* reopen for writing */
+    dd = dd_fdopendir(dd, /*for writing*/0);
+    assert(dd != NULL);
+
+    assert(fchmod(dd->dd_fd, 0750) == 0);
+    dd->mode = 0640;
+
+    fprintf(stderr, "Going to sanitize\n");
+    dd_sanitize_mode_and_owner(dd);
+    fprintf(stderr, "Sanitized\n");
+
+    {
+        DIR *d = opendir(template);
+        struct dirent *dent;
+        while ((dent = readdir(d)) != NULL)
+        {
+            if (   strcmp(".", dent->d_name) == 0
+                || strcmp("..", dent->d_name) == 0
+                || strcmp(".lock", dent->d_name) == 0
+                || strcmp(".libreport", dent->d_name) == 0
+                )
+                continue;
+
+            struct stat sb;
+            printf("Testing element: %s\n", dent->d_name);
+            assert(fstatat(dd->dd_fd, dent->d_name, &sb, 0) == 0 || !"Cannot stat a regular element");
+            assert((sb.st_mode & 0777) == 0640 || !"Failed to chmod a regular element");
+        }
+        closedir(d);
+    }
+
+    {
+        struct stat path_md_st;
+        assert(fstatat(dd->dd_fd, ".libreport", &path_md_st, 0) == 0 || !"Cannot stat meta-data directory");
+        assert((path_md_st.st_mode & 0777) == 0750 || !"Failed chmod meta-data");
+    }
+
+    int md_dir_fd = openat(dd->dd_fd, ".libreport", O_DIRECTORY);
+    assert(md_dir_fd >= 0 || !"Cannot open meta-data directory");
+    DIR *d = fdopendir(md_dir_fd);
+    struct dirent *dent;
+    while ((dent = readdir(d)) != NULL)
+    {
+        if (strcmp(".", dent->d_name) == 0 || strcmp("..", dent->d_name) == 0)
+            continue;
+
+        struct stat sb;
+        printf("Testing meta-data: %s\n", dent->d_name);
+        assert(fstatat(md_dir_fd, dent->d_name, &sb, 0) == 0 || !"Cannot stat meta-data file");
+        assert((sb.st_mode & 0777) == 0640 || !"Failed to chmod a meta-data file");
+    }
+
+    closedir(d);
+    dd_delete(dd);
+
+    *last_slash = '\0';
+    assert(rmdir(template) == 0);
+    return EXIT_SUCCESS;
+}
+]])
+
+## -------- ##
+## dd_owner ##
+## -------- ##
+
+AT_TESTFUN([dd_owner],
+[[
+#include "internal_libreport.h"
+#include <errno.h>
+#include <assert.h>
+
+int main(int argc, char **argv)
+{
+    libreport_g_verbose = 3;
+
+    char template[] = "/tmp/XXXXXX/dump_dir";
+
+    char *last_slash = strrchr(template, '/');
+    *last_slash = '\0';
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    *last_slash = '/';
+
+    printf("Dump dir path: %s\n", template);
+
+    {
+        fprintf(stderr, "TEST === default owner\n");
+        struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+        assert(dd != NULL);
+
+        assert(geteuid() == dd_get_owner(dd));
+        assert(errno == 0);
+
+        assert(dd_delete(dd) == 0);
+    }
+
+    {
+        fprintf(stderr, "TEST === create basic files w/o UID\n");
+        struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+        assert(dd != NULL);
+
+        dd_create_basic_files(dd, (uid_t)-1, NULL);
+        assert(geteuid() == dd_get_owner(dd));
+        assert(errno == 0);
+
+        assert(dd_delete(dd) == 0);
+    }
+
+    {
+        fprintf(stderr, "TEST === create basic files with UID\n");
+        struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+        assert(dd != NULL);
+
+        dd_create_basic_files(dd, (geteuid() + 1), NULL);
+        assert((geteuid() + 1) == dd_get_owner(dd));
+        assert(errno == 0);
+
+        assert(dd_delete(dd) == 0);
+    }
+
+    {
+        fprintf(stderr, "TEST === set no owner\n");
+        struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+        assert(dd != NULL);
+
+        dd_set_no_owner(dd);
+
+        struct passwd *nobody_pw= getpwnam("nobody");
+        assert(nobody_pw != NULL);
+        assert(nobody_pw->pw_uid == dd_get_owner(dd));
+        assert(errno == 0);
+
+        assert(dd_delete(dd) == 0);
+    }
+
+    {
+        fprintf(stderr, "TEST === set artibrary owner\n");
+        struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+        assert(dd != NULL);
+
+        dd_set_owner(dd, (geteuid() + 2));
+        assert((geteuid() + 2) == dd_get_owner(dd));
+        assert(errno == 0);
+
+        assert(dd_delete(dd) == 0);
+    }
+
+    {
+        fprintf(stderr, "TEST === chown no owner\n");
+        struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+        assert(dd != NULL);
+
+        dd_set_no_owner(dd);
+        assert(geteuid() != dd_get_owner(dd));
+        assert(errno == 0);
+
+        dd_chown(dd, geteuid());
+        assert(geteuid() == dd_get_owner(dd));
+        assert(errno == 0);
+
+        assert(dd_delete(dd) == 0);
+    }
+    *last_slash = '\0';
+    assert(rmdir(template) == 0);
+
+    return EXIT_SUCCESS;
+}
+]])
+
+## ------- ##
+## dd_stat ##
+## ------- ##
+
+AT_TESTFUN([dd_stat],
+[[
+#include "internal_libreport.h"
+#include <errno.h>
+#include <assert.h>
+
+int main(int argc, char **argv)
+{
+    libreport_g_verbose = 3;
+
+    char template[] = "/tmp/XXXXXX/dump_dir";
+
+    char *last_slash = strrchr(template, '/');
+    *last_slash = '\0';
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    *last_slash = '/';
+
+    printf("Dump dir path: %s\n", template);
+
+    dd_g_super_user_uid = geteuid();
+
+    struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+    assert(dd != NULL || !"create new");
+    dd_create_basic_files(dd, geteuid(), NULL);
+    dd_save_text(dd, "type", "custom");
+    dd_close(dd);
+    dd = NULL;
+
+    dd = dd_opendir(template, DD_OPEN_FD_ONLY);
+    assert(dd != NULL || !"open fds");
+    {
+        const int fst_stat = dd_stat_for_uid(dd, geteuid());
+
+        assert(fst_stat & DD_STAT_OWNED_BY_UID);
+        assert(fst_stat & DD_STAT_ACCESSIBLE_BY_UID);
+        assert(!(fst_stat & DD_STAT_NO_OWNER));
+    }
+
+    dd = dd_fdopendir(dd, /*for writing*/0);
+    assert(dd != NULL || !"reopen for writing");
+
+    assert(dd_set_owner(dd, geteuid() + 1) == 0);
+    assert(dd_get_owner(dd) == geteuid() + 1);
+    assert(errno == 0);
+
+    {
+        const int scn_stat = dd_stat_for_uid(dd, geteuid() + 2);
+        assert(scn_stat == 0);
+    }
+
+    {
+        const int thr_stat = dd_stat_for_uid(dd, dd_g_super_user_uid);
+        assert(!(thr_stat & DD_STAT_OWNED_BY_UID));
+        assert(thr_stat & DD_STAT_ACCESSIBLE_BY_UID);
+        assert(!(thr_stat & DD_STAT_NO_OWNER));
+    }
+
+    assert(dd_set_no_owner(dd) == 0);
+    assert(dd_get_owner(dd) != geteuid() + 3);
+    assert(errno == 0);
+
+    {
+        const int frt_stat = dd_stat_for_uid(dd, geteuid() + 3);
+        assert(!(frt_stat & DD_STAT_OWNED_BY_UID));
+        assert(frt_stat & DD_STAT_ACCESSIBLE_BY_UID);
+        assert(frt_stat & DD_STAT_NO_OWNER);
+    }
+
+    {
+        const int fft_stat = dd_stat_for_uid(dd, dd_g_super_user_uid);
+        assert(!(fft_stat & DD_STAT_OWNED_BY_UID));
+        assert(fft_stat & DD_STAT_ACCESSIBLE_BY_UID);
+        assert(fft_stat & DD_STAT_NO_OWNER);
+    }
+
+    assert(dd_delete(dd) == 0);
+
+    *last_slash = '\0';
+    assert(rmdir(template) == 0);
+
+    return EXIT_SUCCESS;
+}
+]])
+
+## -------------- ##
+## recursive_lock ##
+## -------------- ##
+
+AT_TESTFUN([recursive_lock],
+[[
+#include "internal_libreport.h"
+#include <errno.h>
+#include <assert.h>
+
+int main(int argc, char **argv)
+{
+    libreport_g_verbose = 3;
+
+    char *path = tmpnam(NULL);
+    struct dump_dir *dd = dd_create(path, -1L, DEFAULT_DUMP_DIR_MODE);
+
+    g_autofree char *lock_path = g_build_filename(path ? path : "", ".lock", NULL);
+    struct stat buf;
+
+    assert(dd);
+
+    assert(lstat(lock_path, &buf) == 0 && S_ISLNK(buf.st_mode));
+
+    dd_create_basic_files(dd, -1L, "/");
+    dd_save_text(dd, "type", "custom");
+
+    struct dump_dir *dd2 = dd_opendir(path, DD_OPEN_READONLY);
+    assert(dd2->owns_lock == 0);
+
+    struct dump_dir *dd3 = dd_opendir(path, 0);
+    assert(dd3->owns_lock == 0);
+
+    dd_close(dd2);
+    assert(lstat(lock_path, &buf) == 0 && S_ISLNK(buf.st_mode));
+
+    dd_close(dd3);
+    assert(lstat(lock_path, &buf) == 0 && S_ISLNK(buf.st_mode));
+
+    dd_close(dd);
+
+    assert(stat(lock_path, &buf) != 0 && errno == ENOENT);
+
+    return 0;
+}
+]])
+
+## --------------------------------- ##
+## libreport_str_is_correct_filename ##
+## --------------------------------- ##
+
+AT_TESTFUN([libreport_str_is_correct_filename],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+#
+int main(void)
+{
+    libreport_g_verbose = 3;
+
+    assert(libreport_str_is_correct_filename("") == false);
+    assert(libreport_str_is_correct_filename("/") == false);
+    assert(libreport_str_is_correct_filename("//") == false);
+    assert(libreport_str_is_correct_filename("/a") == false);
+    assert(libreport_str_is_correct_filename("a/") == false);
+    assert(libreport_str_is_correct_filename(".") == false);
+    assert(libreport_str_is_correct_filename("..") == false);
+    assert(libreport_str_is_correct_filename("/.") == false);
+    assert(libreport_str_is_correct_filename("//.") == false);
+    assert(libreport_str_is_correct_filename("./") == false);
+    assert(libreport_str_is_correct_filename(".//") == false);
+    assert(libreport_str_is_correct_filename("/./") == false);
+    assert(libreport_str_is_correct_filename("/..") == false);
+    assert(libreport_str_is_correct_filename("//..") == false);
+    assert(libreport_str_is_correct_filename("../") == false);
+    assert(libreport_str_is_correct_filename("..//") == false);
+    assert(libreport_str_is_correct_filename("/../") == false);
+    assert(libreport_str_is_correct_filename("/.././") == false);
+
+    assert(libreport_str_is_correct_filename("looks-good-but-evil/") == false);
+    assert(libreport_str_is_correct_filename("looks-good-but-evil/../../") == false);
+
+    assert(libreport_str_is_correct_filename(".meta-data") == true);
+    assert(libreport_str_is_correct_filename("..meta-meta-data") == true);
+    assert(libreport_str_is_correct_filename("meta-..-data") == true);
+
+    assert(libreport_str_is_correct_filename("a") == true);
+    assert(libreport_str_is_correct_filename(".a") == true);
+    assert(libreport_str_is_correct_filename("a.") == true);
+    assert(libreport_str_is_correct_filename("ab") == true);
+    assert(libreport_str_is_correct_filename("abc") == true);
+    assert(libreport_str_is_correct_filename("abcd") == true);
+    assert(libreport_str_is_correct_filename("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890+-") == true);
+    assert(libreport_str_is_correct_filename("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890+-=") == false);
+
+    return 0;
+}
+]])
+
+
+## ----------------##
+## create_dump_dir ##
+## ----------------##
+
+AT_TESTFUN([create_dump_dir],
+[[
+#include "testsuite.h"
+
+static int kill_canary(struct dump_dir *dd, void *args)
+{
+    int *cb_canary = (int *)args;
+    *cb_canary = 0;
+    return 0;
+}
+
+static int revive_canary(struct dump_dir *dd, void *args)
+{
+    int *cb_canary = (int *)args;
+    *cb_canary = 1;
+    return 1;
+}
+
+static int lay_an_egg(struct dump_dir *dd, void *args)
+{
+    const char *bird_kind = (const char *)args;
+    dd_save_text(dd, "egg", bird_kind);
+    return 0;
+}
+
+static int create_type(struct dump_dir *dd, void *args)
+{
+    const char *bird_kind = (const char *)args;
+    dd_save_text(dd, FILENAME_TYPE, bird_kind);
+    return 0;
+}
+
+TS_MAIN
+{
+    char template[] = "/tmp/XXXXXX";
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    printf("Base dump dir path: %s\n", template);
+
+    {
+        int cb_canary = 1;
+        struct dump_dir *dd = create_dump_dir(template, "../attest", (uid_t)-1, &kill_canary, &cb_canary);
+        TS_ASSERT_PTR_IS_NULL_MESSAGE(dd, "TYPE cannot be relative path");
+        TS_ASSERT_SIGNED_EQ(1, cb_canary);
+    }
+
+    {
+        int cb_canary = 1;
+        struct dump_dir *dd = create_dump_dir(template, "/tmp/attest", (uid_t)-1, &kill_canary, &cb_canary);
+        TS_ASSERT_PTR_IS_NULL_MESSAGE(dd, "TYPE cannot be absolute path");
+        TS_ASSERT_SIGNED_EQ(1, cb_canary);
+    }
+
+    {
+        int cb_canary = 0;
+        struct dump_dir *dd = create_dump_dir(template, "attest", (uid_t)-1, &revive_canary, &cb_canary);
+        TS_ASSERT_PTR_IS_NULL_MESSAGE(dd, "Non-zero callback return value stops dump dir creation");
+        TS_ASSERT_SIGNED_EQ(1, cb_canary);
+    }
+
+    {
+        struct dump_dir *dd = create_dump_dir(template, "birds", (uid_t)-1, lay_an_egg, (void *)"canary");
+        TS_ASSERT_PTR_IS_NOT_NULL_MESSAGE(dd, "Created dump directory with valid TYPE");
+        TS_ASSERT_STRING_BEGINS_WITH(strrchr(dd->dd_dirname, '/') + 1, "birds", "Type was honored");
+
+        char *loaded_text = dd_load_text(dd, FILENAME_TYPE);
+        TS_ASSERT_STRING_EQ(loaded_text, "birds", "'type' is created from the passed string");
+        g_free(loaded_text);
+
+        loaded_text = dd_load_text(dd, "egg");
+        TS_ASSERT_STRING_EQ(loaded_text, "canary", "Call back saves durable data");
+        g_free(loaded_text);
+        TS_ASSERT_SIGNED_EQ(dd_delete(dd), 0);
+    }
+
+    {
+        struct dump_dir *dd = create_dump_dir(template, "birds", (uid_t)-1, create_type, (void *)"canary");
+        TS_ASSERT_PTR_IS_NOT_NULL_MESSAGE(dd, "Created dump directory with valid TYPE");
+        TS_ASSERT_STRING_BEGINS_WITH(strrchr(dd->dd_dirname, '/') + 1, "birds", "Type was honored");
+        g_autofree char *loaded_text = dd_load_text(dd, FILENAME_TYPE);
+        TS_ASSERT_STRING_EQ(loaded_text, "canary", "'type' was not overwritten");
+        TS_ASSERT_SIGNED_EQ(dd_delete(dd), 0);
+    }
+}
+TS_RETURN_MAIN
+
+]])
+
+
+## --------------------------------- ##
+## create_dump_dir_from_problem_data ##
+## --------------------------------- ##
+
+AT_TESTFUN([create_dump_dir_from_problem_data],
+[[
+#include "testsuite.h"
+
+TS_MAIN
+{
+    char template[] = "/tmp/XXXXXX";
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    printf("Base dump dir path: %s\n", template);
+
+    dd_g_fs_group_gid = getegid();
+
+    g_autoptr(GHashTable) pd = problem_data_new();
+
+    {
+        fprintf(stderr, "=== No FILENAME_TYPE in Problem Data ===\n");
+        struct dump_dir *no_type = create_dump_dir_from_problem_data(pd, template);
+        TS_ASSERT_PTR_IS_NULL_MESSAGE(no_type, "It's not possible to create dump directory without TYPE");
+    }
+
+    {
+        fprintf(stderr, "=== Prohibited name in FILENAME_TYPE in Problem Data ===\n");
+        problem_data_add_text_editable(pd, FILENAME_TYPE, "../attest");
+        struct dump_dir *prohibited_type = create_dump_dir_from_problem_data(pd, template);
+        TS_ASSERT_PTR_IS_NULL_MESSAGE(prohibited_type, "It's not possible to create dump directory with invalid TYPE");
+    }
+
+    problem_data_add_text_editable(pd, FILENAME_TYPE, "attest");
+
+    {
+        fprintf(stderr, "=== NO UID - geteuid() ===\n");
+        struct dump_dir *no_uid_dd_geteuid = create_dump_dir_from_problem_data_ext(pd, template, geteuid());
+        assert(no_uid_dd_geteuid != NULL);
+        assert(dd_get_owner(no_uid_dd_geteuid) == geteuid());
+        assert(errno == 0);
+        assert(dd_delete(no_uid_dd_geteuid) == 0);
+        fprintf(stderr, "=== NO UID - geteuid() ===\n");
+    }
+
+    {
+        fprintf(stderr, "=== NO UID - NO UID ===\n");
+        struct dump_dir *no_uid_dd_nouid = create_dump_dir_from_problem_data_ext(pd, template, (uid_t)-1L);
+        assert(no_uid_dd_nouid != NULL);
+        assert(dd_get_owner(no_uid_dd_nouid) == geteuid());
+        assert(errno == 0);
+        assert(dd_delete(no_uid_dd_nouid) == 0);
+        fprintf(stderr, "=== NO UID - NO UID ===\n");
+    }
+
+    char buf[sizeof(long)*3 + 2];
+    snprintf(buf, sizeof(buf), "%ld", (long)(geteuid() + 1));
+    problem_data_add_text_editable(pd, FILENAME_UID, buf);
+
+    {
+        fprintf(stderr, "=== UID - geteuid() ===\n");
+        struct dump_dir *uid_dd_geteuid = create_dump_dir_from_problem_data_ext(pd, template, geteuid());
+        assert(uid_dd_geteuid != NULL);
+        assert(dd_get_owner(uid_dd_geteuid) == (geteuid() + 1));
+        assert(errno == 0);
+        assert(dd_delete(uid_dd_geteuid) == 0);
+        fprintf(stderr, "=== UID - geteuid() ===\n");
+    }
+
+    {
+        fprintf(stderr, "=== UID - NO UID ===\n");
+        struct dump_dir *uid_dd_nouid = create_dump_dir_from_problem_data_ext(pd, template, (uid_t)-1L);
+        assert(uid_dd_nouid != NULL);
+        assert(dd_get_owner(uid_dd_nouid) == (geteuid() + 1));
+        assert(errno == 0);
+        assert(dd_delete(uid_dd_nouid) == 0);
+        fprintf(stderr, "=== UID - NO UID ===\n");
+    }
+
+    assert(rmdir(template) == 0);
+}
+TS_RETURN_MAIN
+
+]])
+
+## ---------- ##
+## dd_copy_fd ##
+## ---------- ##
+
+AT_TESTFUN([dd_copy_fd],
+[[
+#include "testsuite.h"
+
+void test(const char buffer[], const size_t buffer_size)
+{
+    char template[] = "/tmp/XXXXXX";
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        abort();
+    }
+
+    printf("Dump dir path: %s\n", template);
+
+    struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+    assert(dd != NULL || !"Cannot create new dump directory");
+
+    dd_create_basic_files(dd, geteuid(), NULL);
+
+    char tmpfile[] = "/tmp/libreport-attestsuite-dd_copy_fd.XXXXXX";
+    int tmpfd = mkstemp(tmpfile);
+    libreport_full_write(tmpfd, buffer, buffer_size);
+
+    {
+        assert((-1) != lseek(tmpfd, 0, SEEK_SET));
+
+        const off_t read_truncated = dd_copy_fd(dd, "truncated", tmpfd, 0, buffer_size/2);
+        TS_ASSERT_SIGNED_GE(read_truncated, buffer_size/2);
+        TS_ASSERT_SIGNED_EQ(dd_get_item_size(dd, "truncated"), buffer_size/2);
+        TS_ASSERT_SIGNED_EQ(dd_delete_item(dd, "truncated"), 0);
+    }
+
+    {
+        assert((-1) != lseek(tmpfd, 0, SEEK_SET));
+
+        const off_t read_exact = dd_copy_fd(dd, "exact", tmpfd, 0, buffer_size);
+        TS_ASSERT_SIGNED_EQ(read_exact, buffer_size);
+        TS_ASSERT_SIGNED_EQ(dd_get_item_size(dd, "exact"), buffer_size);
+        TS_ASSERT_SIGNED_EQ(dd_delete_item(dd, "exact"), 0);
+    }
+
+    {
+        assert((-1) != lseek(tmpfd, 0, SEEK_SET));
+
+        const off_t read_bigger = dd_copy_fd(dd, "bigger", tmpfd, 0, buffer_size * 2);
+        TS_ASSERT_SIGNED_EQ(read_bigger, buffer_size);
+        TS_ASSERT_SIGNED_EQ(dd_get_item_size(dd, "bigger"), buffer_size);
+        TS_ASSERT_SIGNED_EQ(dd_delete_item(dd, "bigger"), 0);
+    }
+
+    {
+        assert((-1) != lseek(tmpfd, 0, SEEK_SET));
+
+        const off_t read_no_limit = dd_copy_fd(dd, "no_limit", tmpfd, 0, 0);
+        TS_ASSERT_SIGNED_EQ(read_no_limit, buffer_size);
+        TS_ASSERT_SIGNED_EQ(dd_get_item_size(dd, "no_limit"), buffer_size);
+        TS_ASSERT_SIGNED_EQ(dd_delete_item(dd, "no_limit"), 0);
+    }
+
+    close(tmpfd);
+    unlink(tmpfile);
+    assert(dd_delete(dd) == 0);
+}
+
+TS_MAIN
+{
+    {
+        char buffer[1024*2];
+        memset(buffer, 'x', sizeof(buffer));
+        test(buffer, sizeof(buffer));
+    }
+
+    {
+        char buffer[1024*4];
+        memset(buffer, 'y', sizeof(buffer));
+        test(buffer, sizeof(buffer));
+    }
+
+    {
+        char buffer[1024*6];
+        memset(buffer, 'z', sizeof(buffer));
+        test(buffer, sizeof(buffer));
+    }
+
+
+    {
+        char template[] = "/tmp/XXXXXX";
+
+        if (mkdtemp(template) == NULL) {
+            perror("mkdtemp()");
+            return EXIT_FAILURE;
+        }
+
+        printf("Dump dir path: %s\n", template);
+
+        struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+        assert(dd != NULL || !"Cannot create new dump directory");
+
+        dd_create_basic_files(dd, geteuid(), NULL);
+
+        {
+            int opath_fd = open("/etc/services", O_PATH);
+            char buf[16] = {0};
+            if (read(opath_fd, buf, sizeof(buf)/sizeof(buf[0])) == -1)
+            {
+                assert(errno == EBADF || !"O_PATH fd can be read");
+                close(opath_fd);
+
+                opath_fd = open("/etc/services", O_PATH);
+                assert(opath_fd >= 0);
+
+                const off_t opath_read = dd_copy_fd(dd, "opath", opath_fd, 0, 0);
+                TS_ASSERT_SIGNED_EQ(opath_read, -1);
+                TS_ASSERT_SIGNED_EQ(dd_exist(dd, "opath"), 0);
+            }
+            close(opath_fd);
+        }
+
+        {
+            int wronly_fd = open("/tmp/libreport.testsuite", O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            assert(wronly_fd >= 0 || !"Cannot create temporary file");
+            char buf[] = "Hello, world!";
+            assert(write(wronly_fd, buf, sizeof(buf)/sizeof(buf[0])) == sizeof(buf)/sizeof(buf[0]));
+            close(wronly_fd);
+
+            wronly_fd = open("/tmp/libreport.testsuite", O_WRONLY);
+            assert(wronly_fd >= 0 || !"Cannot re-open temporary file");
+
+            const off_t wronly_read = dd_copy_fd(dd, "wronly", wronly_fd, 0, 0);
+            TS_ASSERT_SIGNED_EQ(wronly_read, -1);
+            TS_ASSERT_SIGNED_EQ(dd_exist(dd, "wronly"), 0);
+
+            close(wronly_fd);
+        }
+
+        dd_delete(dd);
+    }
+}
+TS_RETURN_MAIN
+
+]])
+
+## ------------- ##
+## dd_load_int32 ##
+## ------------- ##
+
+AT_TESTFUN([dd_load_int32],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+#
+int main(void)
+{
+    libreport_g_verbose = 3;
+
+    char template[] = "/tmp/XXXXXX";
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    printf("Dump dir path: %s\n", template);
+
+    struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+    assert(dd != NULL || !"Cannot create new dump directory");
+
+    dd_create_basic_files(dd, geteuid(), NULL);
+    dd_save_text(dd, FILENAME_TYPE, "attest");
+
+    int32_t value;
+
+    dd_save_text(dd, "empty", "");
+    assert(dd_load_int32(dd, "empty", &value) == -EINVAL);
+
+    char *buf = g_strdup_printf("%lld", -1LL + INT32_MIN);
+    assert(buf != NULL);
+
+    dd_save_text(dd, "below_min", buf);
+    g_free(buf);
+
+    assert(dd_load_int32(dd, "below_min", &value) == -ERANGE);
+
+    buf = g_strdup_printf("%"PRId32, INT32_MIN);
+    dd_save_text(dd, "min", buf);
+    g_free(buf);
+
+    assert(dd_load_int32(dd, "min", &value) == 0);
+    assert(value == INT32_MIN || !"min");
+
+    buf = g_strdup_printf("%"PRId32, INT32_MAX);
+    assert(buf != NULL);
+
+    dd_save_text(dd, "max", buf);
+    g_free(buf);
+
+    assert(dd_load_int32(dd, "max", &value) == 0);
+    assert(value == INT32_MAX);
+
+    buf = g_strdup_printf("%lld", 1LL + INT32_MAX);
+    assert(buf != NULL);
+
+    dd_save_text(dd, "above_max", buf);
+    g_free(buf);
+
+    assert(dd_load_int32(dd, "above_max", &value) == -ERANGE);
+
+    dd_save_text(dd, "string_suffix", "123abc");
+    assert(dd_load_int32(dd, "string_suffix", &value) == -EINVAL);
+
+    dd_save_text(dd, "string", "abc");
+    assert(dd_load_int32(dd, "string", &value) == -EINVAL);
+
+    assert(dd_delete(dd) == 0);
+
+    return 0;
+}
+]])
+
+## -------------- ##
+## dd_load_uint32 ##
+## -------------- ##
+
+AT_TESTFUN([dd_load_uint32],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+#
+int main(void)
+{
+    libreport_g_verbose = 3;
+
+    char template[] = "/tmp/XXXXXX";
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    printf("Dump dir path: %s\n", template);
+
+    struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+    assert(dd != NULL || !"Cannot create new dump directory");
+
+    dd_create_basic_files(dd, geteuid(), NULL);
+    dd_save_text(dd, FILENAME_TYPE, "attest");
+
+    uint32_t value;
+
+    dd_save_text(dd, "empty", "");
+    assert(dd_load_uint32(dd, "empty", &value) == -EINVAL);
+
+    dd_save_text(dd, "below_min", "-1");
+    assert(dd_load_uint32(dd, "below_min", &value) == -ERANGE);
+
+    dd_save_text(dd, "min", "0");
+    assert(dd_load_uint32(dd, "min", &value) == 0);
+    assert(value == 0 || !"min");
+
+    char *buf = g_strdup_printf("%"PRIu32, UINT32_MAX);
+    assert(buf != NULL);
+
+    dd_save_text(dd, "max", buf);
+    g_free(buf);
+    assert(dd_load_uint32(dd, "max", &value) == 0);
+    assert(value == UINT32_MAX);
+
+    buf = g_strdup_printf("%lld", 1LL + UINT32_MAX);
+    assert(buf != NULL);
+
+    dd_save_text(dd, "above_max", buf);
+    g_free(buf);
+    assert(dd_load_uint32(dd, "above_max", &value) == -ERANGE);
+
+    dd_save_text(dd, "string_suffix", "123abc");
+    assert(dd_load_uint32(dd, "string_suffix", &value) == -EINVAL);
+
+    dd_save_text(dd, "string", "abc");
+    assert(dd_load_uint32(dd, "string", &value) == -EINVAL);
+
+    assert(dd_delete(dd) == 0);
+
+    return 0;
+}
+]])
+
+## ------------- ##
+## dd_load_int64 ##
+## ------------- ##
+
+AT_TESTFUN([dd_load_int64],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+
+int main(void)
+{
+    libreport_g_verbose = 3;
+
+    char template[] = "/tmp/XXXXXX";
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    printf("Dump dir path: %s\n", template);
+
+    struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+    assert(dd != NULL || !"Cannot create new dump directory");
+
+    dd_create_basic_files(dd, geteuid(), NULL);
+    dd_save_text(dd, FILENAME_TYPE, "attest");
+
+    int64_t value;
+
+    dd_save_text(dd, "empty", "");
+    assert(dd_load_int64(dd, "empty", &value) == -EINVAL);
+
+    dd_save_text(dd, "below_min", "-9223372036854775809");
+    assert(dd_load_int64(dd, "below_min", &value) == -ERANGE);
+
+    char *buf = g_strdup_printf("%"PRId64, INT64_MIN);
+    assert(buf != NULL);
+    dd_save_text(dd, "min", buf);
+    g_free(buf);
+    assert(dd_load_int64(dd, "min", &value) == 0);
+    assert(value == INT64_MIN || !"min");
+
+    buf = g_strdup_printf("%"PRId64, INT64_MAX);
+    assert(buf != NULL);
+    dd_save_text(dd, "max", buf);
+    g_free(buf);
+    assert(dd_load_int64(dd, "max", &value) == 0);
+    assert(value == INT64_MAX);
+
+    dd_save_text(dd, "above_max", "9223372036854775808");
+    assert(dd_load_int64(dd, "above_max", &value) == -ERANGE);
+
+    dd_save_text(dd, "string_suffix", "123abc");
+    assert(dd_load_int64(dd, "string_suffix", &value) == -EINVAL);
+
+    dd_save_text(dd, "string", "abc");
+    assert(dd_load_int64(dd, "string", &value) == -EINVAL);
+
+    assert(dd_delete(dd) == 0);
+
+    return 0;
+}
+]])
+
+## --------------- ##
+## dd_load_uint64  ##
+## --------------- ##
+
+AT_TESTFUN([dd_load_uint64],
+[[
+#include "internal_libreport.h"
+#include <assert.h>
+
+int main(void)
+{
+    libreport_g_verbose = 3;
+
+    char template[] = "/tmp/XXXXXX";
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    printf("Dump dir path: %s\n", template);
+
+    struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+    assert(dd != NULL || !"Cannot create new dump directory");
+
+    dd_create_basic_files(dd, geteuid(), NULL);
+    dd_save_text(dd, FILENAME_TYPE, "attest");
+
+    uint64_t value;
+
+    dd_save_text(dd, "empty", "");
+    assert(dd_load_uint64(dd, "empty", &value) == -EINVAL);
+
+    dd_save_text(dd, "below_min", "-1");
+    assert(dd_load_uint64(dd, "below_min", &value) == -ERANGE);
+
+    dd_save_text(dd, "min", "0");
+    assert(dd_load_uint64(dd, "min", &value) == 0);
+    assert(value == 0 || !"min");
+
+    g_autofree char *buf = NULL;
+    asprintf(&buf, "%"PRIu64, UINT64_MAX);
+    assert(buf != NULL);
+    dd_save_text(dd, "max", buf);
+    assert(dd_load_uint64(dd, "max", &value) == 0);
+    assert(value == UINT64_MAX);
+
+    dd_save_text(dd, "above_max", "18446744073709551616");
+    assert(dd_load_uint64(dd, "above_max", &value) == -ERANGE);
+
+    dd_save_text(dd, "string_suffix", "123abc");
+    assert(dd_load_uint64(dd, "string_suffix", &value) == -EINVAL);
+
+    dd_save_text(dd, "string", "abc");
+    assert(dd_load_uint64(dd, "string", &value) == -EINVAL);
+
+    assert(dd_delete(dd) == 0);
+
+    return 0;
+}
+]])
+
+## ----------------- ##
+## dd_create_archive ##
+## ----------------- ##
+
+AT_TESTFUN([dd_create_archive],
+[[
+#include "internal_libreport.h"
+#include <archive.h>
+#include <archive_entry.h>
+#include <assert.h>
+
+static int copy_data(struct archive *in, struct archive *out)
+{
+    int r;
+    const void *buff;
+    size_t size;
+    la_int64_t offset;
+
+    for (;;)
+    {
+        r = archive_read_data_block(in, &buff, &size, &offset);
+        if (r == ARCHIVE_EOF)
+            return (ARCHIVE_OK);
+        if (r < ARCHIVE_OK)
+            return (r);
+        r = archive_write_data_block(out, buff, size, offset);
+        if (r < ARCHIVE_OK)
+        {
+            fprintf(stderr, "Error: archive_write_data_block() failed: %s\n", archive_error_string(out));
+            return (r);
+        }
+    }
+}
+
+void verify_archive(struct dump_dir *dd, const char *file_name,
+    const_string_vector_const_ptr_t included_files,
+    const_string_vector_const_ptr_t excluded_files)
+{
+    unsigned c = 0;
+    for (const_string_vector_const_ptr_t i = included_files; i && *i; ++i)
+        ++c;
+    g_autofree int *check_array = g_malloc0(c * sizeof(int));
+
+    struct archive *in_archive;
+    struct archive *out_archive;
+    struct archive_entry *entry = NULL;
+    int flags = ARCHIVE_EXTRACT_TIME|ARCHIVE_EXTRACT_PERM|ARCHIVE_EXTRACT_ACL|ARCHIVE_EXTRACT_FFLAGS;
+
+    in_archive = archive_read_new();
+    archive_read_support_filter_gzip(in_archive);
+    archive_read_support_format_tar(in_archive);
+
+    int r = archive_read_open_filename(in_archive, file_name, 10240);
+    if (r != ARCHIVE_OK)
+    {
+        fprintf(stderr, "Failed to open archive '%s': %s\n", file_name, archive_error_string(in_archive));
+        abort();
+    }
+    const char *real_file = "/tmp/libreport-attest-extracted";
+    for (;;)
+    {
+        if (entry)
+            archive_entry_clear(entry);
+        r = archive_read_next_header(in_archive, &entry);
+        if (r == ARCHIVE_EOF)
+        {
+            archive_entry_free(entry);
+            archive_read_close(in_archive);
+            //uncomment to cause a segfault
+            //archive_read_free(in_archive);
+            break;
+        }
+
+        const char *path = g_strdup(archive_entry_pathname(entry));
+
+        if (archive_entry_filetype(entry) != AE_IFREG)
+        {
+            fprintf(stderr, "Not regular file: '%s', found in archive: '%s'\n", path, file_name);
+            g_free((void *)path);
+            continue;
+        }
+
+        const_string_vector_const_ptr_t i = included_files;
+        for (c = 0; i && *i; ++i, ++c)
+        {
+            if (strcmp(*i, path) == 0)
+                break;
+        }
+
+        if (i && *i != NULL)
+        {
+            printf("Included file: '%s', found in archive '%s'\n", path, file_name);
+            check_array[c] += 1;
+
+            unlink(real_file);
+            out_archive = archive_write_disk_new();
+            archive_write_disk_set_options(out_archive, flags);
+            archive_write_disk_set_standard_lookup(out_archive);
+            archive_entry_set_pathname(entry, "/tmp/libreport-attest-extracted");
+            r = archive_write_header(out_archive, entry);
+            if (r != ARCHIVE_OK)
+                fprintf(stderr, "Error: archive_write_header() failed: %s\n", archive_error_string(out_archive));
+            else if (archive_entry_size(entry) > 0)
+            {
+                r = copy_data(in_archive, out_archive);
+                if (r != ARCHIVE_OK)
+                {
+                    fprintf(stderr, "Error: copy_data() failed: %s\n", archive_error_string(out_archive));
+                    abort();
+                }
+            }
+
+            archive_write_close(out_archive);
+            archive_write_free(out_archive);
+
+            g_autofree char *original = dd_load_text(dd, path);
+            assert(original != NULL);
+            assert(original[0] != '\0');
+
+            g_autofree char *extracted = libreport_xmalloc_xopen_read_close("/tmp/libreport-attest-extracted", NULL);
+            assert(extracted != NULL);
+
+            if (strcmp(extracted, original) != 0)
+            {
+                fprintf(stderr, "Invalid file contents: '%s'\nExp: '%s'\nGot: '%s'\n", path, original, extracted);
+                abort();
+            }
+            g_free((void *)path);
+            continue;
+        }
+
+        i = excluded_files;
+        for (; i && *i; ++i)
+        {
+            if (strcmp(*i, path) == 0)
+                break;
+        }
+
+        if (i && *i != NULL)
+        {
+            fprintf(stderr, "Excluded file: '%s', found in archive '%s'\n", path, file_name);
+            abort();
+        }
+
+        fprintf(stderr, "Uncategorized file: '%s', found in archive '%s'\n", path, file_name);
+        g_free((void *)path);
+    }
+
+    int err = 0;
+    const_string_vector_const_ptr_t i = included_files;
+    for (c = 0; i && *i; ++i, ++c)
+    {
+        switch (check_array[c])
+        {
+            case 0:
+                fprintf(stderr, "Not found included file: '%s', in archive: %s\n", *i, file_name);
+                ++err;
+                break;
+            case 1:
+                fprintf(stdout, "Found included file: '%s', in archive: %s\n", *i, file_name);
+                break;
+            default:
+                fprintf(stderr, "%d occurrences of included file: '%s', in archive: %s\n", check_array[c], *i, file_name);
+                ++err;
+                break;
+        }
+    }
+
+    if (err)
+        abort();
+
+    return;
+}
+
+int main(void)
+{
+    libreport_g_verbose = 3;
+
+    char template[] = "/tmp/XXXXXX";
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    printf("Dump dir path: %s\n", template);
+
+    struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+    assert(dd != NULL || !"Cannot create new dump directory");
+
+
+#define COMMON_FILES "time", "last_occurrence", "uid", "kernel", \
+                     "architecture", "hostname", "os_info", "os_release", \
+                     "type", "count", "component", "program_log"
+#define SENSITIVE_FILES "environ", "backtrace", "secret_file", "private_file", \
+                        "useless_file"
+
+    dd_create_basic_files(dd, geteuid(), NULL);
+    dd_save_text(dd, FILENAME_TYPE, "attest");
+    dd_save_text(dd, FILENAME_COUNT, "1");
+    dd_save_text(dd, FILENAME_COMPONENT, "libreport-attest");
+    dd_save_text(dd, "program_log", "Something very important!");
+
+    const gchar *excluded_files[] = {
+        SENSITIVE_FILES,
+        NULL,
+    };
+
+    for (const gchar **iter = excluded_files; *iter; ++iter)
+        dd_save_text(dd, *iter, *iter);
+
+    /* Un-supported archive type */
+    {
+        fprintf(stderr, "TEST-CASE: Un-supported type\n");
+        fprintf(stdout, "TEST-CASE: Un-supported type\n");
+        const int r = dd_create_archive(dd, "/tmp/libreport-attest.omg", NULL, 0);
+        printf("dd_create_archive() == %d\n", r);
+        assert(r == -ENOSYS || !"Not supported");
+    }
+
+    /* File already exists. */
+    {
+        fprintf(stderr, "TEST-CASE: File exists\n");
+        fprintf(stdout, "TEST-CASE: File exists\n");
+        char file_contents[] = "Non emtpy file";
+        const char *file_name = "/tmp/libreport-attest.tar.gz";
+        FILE *test_file = fopen(file_name, "w");
+        assert(test_file != NULL);
+        assert(fprintf(test_file, "%s", file_contents) == strlen(file_contents));
+        fclose(test_file);
+
+        assert(dd_create_archive(dd, file_name, NULL, 0) == -EEXIST || !"Exists");
+
+        g_autofree char *canary = libreport_xmalloc_xopen_read_close(file_name, NULL);
+        assert(canary != NULL);
+        assert(strcmp(canary, file_contents) == 0);
+    }
+
+    /* All elements */
+    {
+        fprintf(stderr, "TEST-CASE: Compress all elements\n");
+        fprintf(stdout, "TEST-CASE: Compress all elements\n");
+
+        const gchar *included_files[] = {
+            COMMON_FILES,
+            SENSITIVE_FILES,
+            NULL,
+        };
+
+        const char *file_name = "/tmp/libreport-attest-all.tar.gz";
+        unlink(file_name);
+        assert(dd_create_archive(dd, file_name, NULL, 0) == 0 || !"All elements");
+
+        verify_archive(dd, file_name, included_files, NULL);
+
+        unlink(file_name);
+    }
+
+    /* Excluded elements */
+    {
+        fprintf(stderr, "TEST-CASE: Exclude elements\n");
+        fprintf(stdout, "TEST-CASE: Exclude elements\n");
+
+        const char *included_files[] = {
+            COMMON_FILES,
+            NULL,
+        };
+
+        const char *file_name = "/tmp/libreport-attest-excluded.tar.gz";
+        unlink(file_name);
+        assert(dd_create_archive(dd, file_name, excluded_files, 0) == 0 || !"Excluded elements");
+
+        verify_archive(dd, file_name, included_files, excluded_files);
+
+        unlink(file_name);
+    }
+
+    assert(dd_delete(dd) == 0);
+
+    return 0;
+}
+]])
+
+## --------------- ##
+## dd_compute_size ##
+## --------------- ##
+
+AT_TESTFUN([dd_compute_size],
+[[
+#include "testsuite.h"
+
+TS_MAIN
+{
+    char template[] = "/tmp/XXXXXX/dump_dir";
+
+    char *last_slash = strrchr(template, '/');
+    *last_slash = '\0';
+
+    if (mkdtemp(template) == NULL) {
+        perror("mkdtemp()");
+        return EXIT_FAILURE;
+    }
+
+    struct dump_dir *dd = dd_create(template, (uid_t)-1, 0640);
+
+    off_t expected = 0;
+    struct string_pair {
+        const char *first;
+        const char *second;
+        } pairs [] = {
+        { .first = "type", .second = "attestsuite" },
+        { .first = "analyzer", .second = "dd_compute_size" },
+        { .first = "time", .second = "1" },
+        { .first = "first", .second = "second" },
+        { .first = "foo", .second = "blah" },
+        { .first = "moo", .second = "cow" },
+        { .first = "rooster", .second = "cock-a-doodle-doo" },
+        { .first = "frog", .second = "ribbit" },
+        { .first = "pig", .second = "oink" },
+    };
+
+    for (size_t i = 0; i < ARRAY_SIZE(pairs); ++i)
+    {
+        dd_save_text(dd, pairs[i].first, pairs[i].second);
+        expected += strlen(pairs[i].second);
+        assert(expected >= 0);
+    }
+
+    TS_ASSERT_SIGNED_EQ(dd_compute_size(dd, 0), expected);
+    dd_delete(dd);
+}
+TS_RETURN_MAIN
+
+]])
+
+
+## ----------------- ##
+## dd_items_handling ##
+## ----------------- ##
+
+AT_TESTFUN([dd_items_handling],
+[[
+#include "testsuite.h"
+#include "testsuite_tools.h"
+
+TS_MAIN
+{
+    struct dump_dir *dd = testsuite_dump_dir_create(-1, -1, 0);
+    dd_create_basic_files(dd, geteuid(), NULL);
+
+    g_autofree char *base_dir = g_strndup(dd->dd_dirname, strrchr(dd->dd_dirname, '/') - dd->dd_dirname);
+    assert(base_dir != NULL);
+
+    g_autofree char *test_file_full_path = g_build_filename(base_dir, "libreport-test", NULL);
+    FILE *test_file = fopen(test_file_full_path, "w");
+    assert(test_file != NULL);
+    fprintf(test_file, "dd_items_handling");
+    fclose(test_file);
+
+    assert(symlinkat(test_file_full_path, dd->dd_fd, "link-item") == 0);
+    assert(mkdirat(dd->dd_fd, "dir-item", 0777) == 0);
+
+    {
+        struct stat buf;
+        TS_ASSERT_SIGNED_EQ(dd_item_stat(dd, test_file_full_path, &buf), -EINVAL);
+        TS_ASSERT_SIGNED_EQ(dd_item_stat(dd, "../libreport-test", &buf), -EINVAL);
+        TS_ASSERT_SIGNED_EQ(dd_item_stat(dd, "foo-blah-does-not-exist", &buf), -ENOENT);
+        TS_ASSERT_SIGNED_EQ(dd_item_stat(dd, "link-item", &buf), -EMEDIUMTYPE);
+        TS_ASSERT_SIGNED_EQ(dd_item_stat(dd, "dir-item", &buf), -EMEDIUMTYPE);
+    }
+
+    {
+        TS_ASSERT_SIGNED_EQ(dd_get_item_size(dd, test_file_full_path), -1);
+        TS_ASSERT_SIGNED_EQ(dd_get_item_size(dd, "../libreport-test"), -1);
+        TS_ASSERT_SIGNED_EQ(dd_get_item_size(dd, "foo-blah-does-not-exist"), 0);
+        TS_ASSERT_SIGNED_EQ(dd_get_item_size(dd, "link-item"), -1);
+        TS_ASSERT_SIGNED_EQ(dd_get_item_size(dd, "dir-item"), -1);
+    }
+
+    {
+        struct stat buf, real_buf;
+        assert(fstatat(dd->dd_fd, FILENAME_TIME, &real_buf, 0) == 0);
+        TS_ASSERT_SIGNED_EQ(dd_item_stat(dd, FILENAME_TIME, &buf), 0);
+        TS_ASSERT_SIGNED_EQ(real_buf.st_ino, buf.st_ino);
+
+        TS_ASSERT_SIGNED_EQ(real_buf.st_size, dd_get_item_size(dd, FILENAME_TIME));
+    }
+
+    {
+        TS_ASSERT_SIGNED_EQ(dd_delete_item(dd, test_file_full_path), -EINVAL);
+        TS_ASSERT_SIGNED_EQ(dd_delete_item(dd, "../libreport-test"), -EINVAL);
+        TS_ASSERT_SIGNED_EQ(dd_delete_item(dd, "foo-blah-does-not-exist"), 0);
+        TS_ASSERT_SIGNED_EQ(dd_delete_item(dd, "link-item"), 0);
+        TS_ASSERT_SIGNED_EQ(dd_delete_item(dd, "dir-item"), -1);
+    }
+
+    /* A T _REMOVEDIR (0x200) interferes with autconf */
+    assert(unlinkat(dd->dd_fd, "dir-item", 0x200) == 0);
+    assert(unlink(test_file_full_path) == 0);
+
+    testsuite_dump_dir_delete(dd);
+}
+TS_RETURN_MAIN
+]])
+
+
+## ------------------- ##
+## dd_get_env_variable ##
+## ------------------- ##
+
+AT_TESTFUN([dd_get_env_variable],
+[[
+#include "testsuite.h"
+#include "testsuite_tools.h"
+
+TS_MAIN
+{
+    struct dump_dir *dd = testsuite_dump_dir_create(-1, -1, 0);
+
+    dd_create_basic_files(dd, geteuid(), NULL);
+
+    g_autofree char *value = NULL;
+    TS_ASSERT_SIGNED_EQ(dd_get_env_variable(dd, "FROG", &value), -ENOENT);
+    TS_ASSERT_PTR_IS_NULL_MESSAGE(value, "Untouched return value on -ENOENT");
+
+    dd_save_text(dd, FILENAME_ENVIRON, "FROG=ribbit\nROOSTER=cockle-doodle-doo");
+
+    TS_ASSERT_FUNCTION(dd_get_env_variable(dd, "HORSE", &value));
+    TS_ASSERT_PTR_IS_NULL_MESSAGE(value, "Untouched return value on missing variable");
+
+    TS_ASSERT_FUNCTION(dd_get_env_variable(dd, "ROOSTER", &value));
+    TS_ASSERT_STRING_EQ(value, "cockle-doodle-doo", "Variable ROOSTER loaded from the dump dir");
+
+    testsuite_dump_dir_delete(dd);
+}
+TS_RETURN_MAIN
+]])
+
+
+## ----------------------- ##
+## dd_get_first_occurrence ##
+## ----------------------- ##
+
+AT_TESTFUN([dd_get_first_occurrence],
+[[
+#include "testsuite.h"
+#include "testsuite_tools.h"
+
+TS_MAIN
+{
+    {   /* No time file */
+        const time_t time_before_create = time(NULL);
+        struct dump_dir *dd = testsuite_dump_dir_create(-1, -1, 0);
+        TS_ASSERT_SIGNED_GE(dd_get_first_occurrence(dd), time_before_create);
+
+        const time_t time_backup = dd_get_first_occurrence(dd);
+        sleep(2);
+        TS_ASSERT_SIGNED_EQ(dd_get_first_occurrence(dd), time_backup);
+
+        sleep(2);
+        dd_create_basic_files(dd, geteuid(), NULL);
+        TS_ASSERT_SIGNED_EQ(dd_get_first_occurrence(dd), time_backup);
+
+        uint64_t saved;
+        TS_ASSERT_FUNCTION(dd_load_uint64(dd, FILENAME_TIME, &saved));
+        TS_ASSERT_SIGNED_EQ(saved, dd_get_first_occurrence(dd));
+
+        testsuite_dump_dir_delete(dd);
+    }
+
+    {   /* Invalid time file */
+        struct dump_dir *dd = testsuite_dump_dir_create(-1, -1, 0);
+        const time_t time_backup = dd_get_first_occurrence(dd);
+        dd_save_text(dd, FILENAME_TIME, "foo");
+        sleep(2);
+        dd_create_basic_files(dd, geteuid(), NULL);
+        TS_ASSERT_SIGNED_EQ(dd_get_first_occurrence(dd), time_backup);
+
+        testsuite_dump_dir_delete(dd);
+    }
+
+    {   /* Valid time file */
+        struct dump_dir *dd = testsuite_dump_dir_create(-1, -1, 0);
+        dd_save_text(dd, FILENAME_TIME, "1234567");
+        sleep(2);
+        dd_create_basic_files(dd, geteuid(), NULL);
+        TS_ASSERT_SIGNED_EQ(dd_get_first_occurrence(dd), 1234567);
+
+        testsuite_dump_dir_delete(dd);
+    }
+
+    { /* Impossible case = dd->dd_time == -1 */
+        struct dump_dir *dd = testsuite_dump_dir_create(-1, -1, 0);
+        dd->dd_time = -1;
+        errno = 0;
+        TS_ASSERT_SIGNED_EQ(dd_get_first_occurrence(dd), -1);
+        TS_ASSERT_SIGNED_EQ(errno, ENODATA);
+
+        testsuite_dump_dir_delete(dd);
+    }
+}
+TS_RETURN_MAIN
+]])
+
+## ----------------------- ##
+## dd_get_last_occurrence ##
+## ----------------------- ##
+
+AT_TESTFUN([dd_get_last_occurrence],
+[[
+#include "testsuite.h"
+#include "testsuite_tools.h"
+
+TS_MAIN
+{
+    struct dump_dir *dd = testsuite_dump_dir_create(-1, -1, 0);
+    TS_ASSERT_SIGNED_EQ(dd_get_last_occurrence(dd), dd_get_first_occurrence(dd));
+
+    dd->dd_time = (time_t)1234567;
+    dd_create_basic_files(dd, geteuid(), NULL);
+
+    TS_ASSERT_SIGNED_EQ(dd_get_last_occurrence(dd), dd_get_first_occurrence(dd));
+    TS_ASSERT_SIGNED_EQ(dd_get_last_occurrence(dd), 1234567);
+
+    dd_save_text(dd, FILENAME_LAST_OCCURRENCE, "123");
+    TS_ASSERT_SIGNED_EQ(dd_get_last_occurrence(dd), dd_get_first_occurrence(dd));
+    TS_ASSERT_SIGNED_EQ(dd_get_last_occurrence(dd), 1234567);
+
+    dd_save_text(dd, FILENAME_LAST_OCCURRENCE, "7654321");
+    TS_ASSERT_SIGNED_NEQ(dd_get_last_occurrence(dd), dd_get_first_occurrence(dd));
+    TS_ASSERT_SIGNED_EQ(dd_get_last_occurrence(dd), 7654321);
+
+    dd->dd_time = -1;
+    errno = 0;
+    TS_ASSERT_SIGNED_EQ(dd_get_last_occurrence(dd), -1);
+    TS_ASSERT_SIGNED_EQ(errno, ENODATA);
+
+    dd_delete_item(dd, FILENAME_LAST_OCCURRENCE);
+    errno = 0;
+    TS_ASSERT_SIGNED_EQ(dd_get_last_occurrence(dd), -1);
+    TS_ASSERT_SIGNED_EQ(errno, ENODATA);
+
+    testsuite_dump_dir_delete(dd);
+}
+TS_RETURN_MAIN
+]])
+
+## ------------ ##
+## dd_open_item ##
+## ------------ ##
+
+AT_TESTFUN([dd_open_item], [[
+#include "testsuite.h"
+#include "testsuite_tools.h"
+
+TS_MAIN
+{
+    struct dump_dir *dd = testsuite_dump_dir_create(-1, -1, 0);
+    dd->dd_time = (time_t)1234567;
+    dd_create_basic_files(dd, geteuid(), NULL);
+
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "/", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "//", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "/a", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "a/", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, ".", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "..", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "/.", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "//.", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "./", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, ".//", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "/./", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "/..", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "//..", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "../", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "..//", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "/../", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "/.././", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "looks-good-but-evil/", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "looks-good-but-evil/../../", O_RDWR), -EINVAL);
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890+-=", O_RDWR), -EINVAL);
+
+    const int fd_rdonly_noent = dd_open_item(dd, "nofile", O_RDONLY);
+    TS_ASSERT_SIGNED_LT(fd_rdonly_noent, 0);
+
+    const int fd_wronly_noent = dd_open_item(dd, "nofile", O_RDWR);
+    TS_ASSERT_SIGNED_GE(fd_wronly_noent, 0);
+    if (g_testsuite_last_ok) {
+        libreport_full_write_str(fd_wronly_noent, "fd_wronly_noent");
+        close(fd_wronly_noent);
+
+        char *const noent_contents = dd_load_text(dd, "nofile");
+        TS_ASSERT_STRING_EQ(noent_contents, "fd_wronly_noent", "Successfully wrote data");
+        g_free(noent_contents);
+    }
+
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "time", O_RDONLY | O_EXCL), -ENOTSUP);
+
+    const int fd_rdonly_time = dd_open_item(dd, "time", O_RDONLY);
+    TS_ASSERT_SIGNED_GE(fd_rdonly_time, 0);
+    if (g_testsuite_last_ok) {
+        g_autofree char *time = dd_load_text(dd, "time");
+        TS_ASSERT_PTR_IS_NOT_NULL(time);
+
+        char rdonly_time_contents[16];
+        int bytes_rdonly_time = libreport_full_read(fd_rdonly_time, rdonly_time_contents, sizeof(rdonly_time_contents));
+        TS_ASSERT_SIGNED_GT(bytes_rdonly_time, 0);
+        if (bytes_rdonly_time > 0) {
+            rdonly_time_contents[bytes_rdonly_time] = '\0';
+            TS_ASSERT_STRING_EQ(rdonly_time_contents, time, "Read only time");
+        }
+        else {
+            TS_PRINTF("FD %d read error: %s\n", fd_rdonly_time, strerror(errno));
+        }
+        close(fd_rdonly_time);
+    }
+
+    TS_ASSERT_SIGNED_EQ(dd_open_item(dd, "time", O_RDWR | O_EXCL), -ENOTSUP);
+
+    const int fd_rdwr_time = dd_open_item(dd, "time", O_RDWR);
+    TS_ASSERT_SIGNED_GE(fd_rdwr_time, 0);
+    if (g_testsuite_last_ok) {
+        libreport_full_write_str(fd_rdwr_time, "7654321");
+
+        TS_ASSERT_FUNCTION(lseek(fd_rdwr_time, 0, SEEK_SET));
+
+        char rdwr_time_contents[16];
+        int bytes_rdwr_time = libreport_full_read(fd_rdwr_time, rdwr_time_contents, sizeof(rdwr_time_contents));
+        close(fd_rdwr_time);
+
+        TS_ASSERT_SIGNED_GT(bytes_rdwr_time, 0);
+        if (g_testsuite_last_ok) {
+            rdwr_time_contents[bytes_rdwr_time] = '\0';
+
+            char *const time_contents = dd_load_text(dd, "time");
+            TS_ASSERT_STRING_EQ(rdwr_time_contents, "7654321", "Successfully wrote time data");
+            TS_ASSERT_STRING_EQ(time_contents, "7654321", "Successfully wrote time data");
+            TS_ASSERT_STRING_EQ(rdwr_time_contents, time_contents, "Read only time");
+            g_free(time_contents);
+
+        }
+        else {
+            TS_PRINTF("FD %d read error: %s\n", fd_rdwr_time, strerror(errno));
+        }
+    }
+
+    testsuite_dump_dir_delete(dd);
+}
+TS_RETURN_MAIN
+]])
+
+
+## ----------------- ##
+## dd_open_item_file ##
+## ----------------- ##
+
+AT_TESTFUN([dd_open_item_file], [[
+#include "testsuite.h"
+#include "testsuite_tools.h"
+
+TS_MAIN
+{
+    struct dump_dir *dd = testsuite_dump_dir_create(-1, -1, 0);
+    dd->dd_time = (time_t)1234567;
+    dd_create_basic_files(dd, geteuid(), NULL);
+
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "/", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "//", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "/a", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "a/", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, ".", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "..", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "/.", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "//.", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "./", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, ".//", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "/./", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "/..", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "//..", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "../", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "..//", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "/../", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "/.././", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "looks-good-but-evil/", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "looks-good-but-evil/../../", O_RDWR));
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890+-=", O_RDWR));
+
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "nofile", O_RDONLY));
+
+    {
+        FILE *const f_rdwr_noent = dd_open_item_file(dd, "nofile", O_RDWR);
+        TS_ASSERT_PTR_IS_NOT_NULL(f_rdwr_noent);
+        if (g_testsuite_last_ok) {
+            fprintf(f_rdwr_noent, "%s", "f_rdwr_noent");
+            rewind(f_rdwr_noent);
+
+            char rdwr_contents[256];
+            TS_ASSERT_PTR_IS_NOT_NULL(fgets(rdwr_contents, sizeof(rdwr_contents), f_rdwr_noent));
+            TS_ASSERT_STRING_EQ(rdwr_contents, "f_rdwr_noent", "Successfully read data");
+            fclose(f_rdwr_noent);
+
+            char *const noent_contents = dd_load_text(dd, "nofile");
+            TS_ASSERT_STRING_EQ(noent_contents, "f_rdwr_noent", "Successfully wrote data");
+            g_free(noent_contents);
+        }
+    }
+
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "time", O_RDONLY | O_EXCL));
+
+    {
+        FILE *const f_rdonly_time = dd_open_item_file(dd, "time", O_RDONLY);
+        TS_ASSERT_PTR_IS_NOT_NULL(f_rdonly_time);
+        if (g_testsuite_last_ok) {
+            g_autofree char *time = dd_load_text(dd, "time");
+            TS_ASSERT_PTR_IS_NOT_NULL(time);
+
+            char rdonly_time_contents[16];
+            char *const res = fgets(rdonly_time_contents, sizeof(rdonly_time_contents), f_rdonly_time);
+            TS_ASSERT_PTR_EQ(rdonly_time_contents, res);
+            if (g_testsuite_last_ok) {
+                TS_ASSERT_STRING_EQ(rdonly_time_contents, time, "Read only time");
+            }
+            else {
+                TS_PRINTF("File 'time' read error: %s\n", strerror(errno));
+            }
+            fclose(f_rdonly_time);
+        }
+    }
+
+    TS_ASSERT_PTR_IS_NULL(dd_open_item_file(dd, "time", O_RDWR | O_EXCL));
+
+    {
+        FILE *const f_rdwr_time = dd_open_item_file(dd, "time", O_RDWR);
+        TS_ASSERT_PTR_IS_NOT_NULL(f_rdwr_time);
+        if (g_testsuite_last_ok) {
+            fprintf(f_rdwr_time, "7654321");
+            rewind(f_rdwr_time);
+
+            char rdwr_contents[256];
+            TS_ASSERT_PTR_IS_NOT_NULL(fgets(rdwr_contents, sizeof(rdwr_contents), f_rdwr_time));
+            TS_ASSERT_STRING_EQ(rdwr_contents, "7654321", "Successfully read time data");
+            fclose(f_rdwr_time);
+
+            char *const time_contents = dd_load_text(dd, "time");
+            TS_ASSERT_STRING_EQ(time_contents, "7654321", "Successfully wrote time data");
+            g_free(time_contents);
+        }
+    }
+
+    testsuite_dump_dir_delete(dd);
+}
+TS_RETURN_MAIN
+]])
